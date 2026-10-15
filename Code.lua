@@ -1,1 +1,312 @@
+-- 🌑 DARK HUB v3.1
+-- Hub de scripts (interface Rayfield) - Mobile e PC
+-- Made by Syntax, Dark & Claude
+--
+-- Para adicionar um script: acrescente uma linha na tabela HUB abaixo.
+-- Campos: name, url, key (true = precisa de key), warn (aviso curto)
+
+-- Opcional: link RAW deste arquivo, usado pelo botão "Recarregar Hub"
+local HUB_URL = "https://raw.githubusercontent.com/Darklindo/Script-test/main/Cod3.lua"
+
+-- ============================================
+-- DADOS
+-- ============================================
+local HUB = {
+    {
+        tab = "🌍 Universal",
+        sections = {
+            {
+                title = "Administração & Comandos",
+                scripts = {
+                    { name = "Infinite Yield", url = "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source" },
+                    { name = "CMD-X", url = "https://raw.githubusercontent.com/CMD-X/CMD-X/master/Source" },
+                    { name = "Nameless Admin", url = "https://raw.githubusercontent.com/FilteringEnabled/NamelessAdmin/main/Source" },
+                },
+            },
+            {
+                title = "Visual & ESP",
+                scripts = {
+                    { name = "Universal ESP", url = "https://raw.githubusercontent.com/ic3w0lf22/Unnamed-ESP/master/UnnamedESP.lua" },
+                    { name = "AirHub V2 (Aimbot & ESP)", url = "https://raw.githubusercontent.com/Exunys/AirHub-V2/main/src/Main.lua" },
+                },
+            },
+            {
+                title = "Movimento",
+                scripts = {
+                    { name = "Fly GUI V3", url = "https://raw.githubusercontent.com/XNEOFF/FlyGuiV3/main/FlyGuiV3.txt" },
+                    { name = "Noclip", url = "https://pastebin.com/raw/XHqcNhEX", warn = "link não verificado" },
+                },
+            },
+            {
+                title = "Ferramentas",
+                scripts = {
+                    { name = "Remote Spy (SimpleSpy V3)", url = "https://raw.githubusercontent.com/infyiff/backup/main/SimpleSpyV3/main.lua" },
+                    { name = "Dex Explorer", url = "https://raw.githubusercontent.com/infyiff/backup/main/dex.lua" },
+                    { name = "Dark Dex V3", url = "https://raw.githubusercontent.com/Babyhamsta/RBLX_Scripts/main/Universal/BypassedDarkDexV3.lua" },
+                    { name = "FPS Unlocker", url = "https://pastebin.com/raw/q4ezfNQF", warn = "link não verificado" },
+                },
+            },
+        },
+    },
+    {
+        tab = "🍎 Blox Fruits",
+        sections = {
+            {
+                title = "Hubs",
+                scripts = {
+                    { name = "Hoho Hub", url = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI", key = true },
+                    { name = "Redz Hub", url = "https://raw.githubusercontent.com/tlredz/Scripts/refs/heads/main/main.luau" },
+                    { name = "Speed Hub X", url = "https://raw.githubusercontent.com/AhmadV99/Speed-Hub-X/main/Speed%20Hub%20X.lua" },
+                    { name = "Zen Hub", url = "https://raw.githubusercontent.com/Kaizenofficiall/ZenHub/main/Loader" },
+                    { name = "Mukuro Hub", url = "https://raw.githubusercontent.com/xQuartyx/DonateMe/main/ScriptLoader", warn = "carrega código de outro servidor" },
+                },
+            },
+        },
+    },
+    {
+        tab = "🔫 Arsenal",
+        sections = {
+            {
+                title = "Hubs",
+                scripts = {
+                    { name = "Owl Hub", url = "https://raw.githubusercontent.com/CriShoux/OwlHub/master/OwlHub.txt" },
+                },
+            },
+        },
+    },
+    {
+        tab = "🏙️ Da Hood",
+        sections = {
+            {
+                title = "Hubs",
+                scripts = {
+                    { name = "MTriet Hub", url = "https://raw.githubusercontent.com/Minhtriettt/Free-Script/main/MTriet-Hub.lua" },
+                    { name = "SwagMode", url = "https://raw.githubusercontent.com/lerkermer/lua-projects/master/SwagModeV002", key = true, warn = "código ofuscado" },
+                },
+            },
+        },
+    },
+    {
+        tab = "🚓 Jailbreak",
+        sections = {
+            {
+                title = "Hubs",
+                scripts = {
+                    { name = "V.G Hub", url = "https://raw.githubusercontent.com/1201for/V.G-Hub/main/V.Ghub" },
+                    { name = "Nexus", url = "https://raw.githubusercontent.com/s-o-a-b/nexus/main/loadstring", warn = "carrega código de outro repositório" },
+                },
+            },
+        },
+    },
+    {
+        tab = "⚽ Blade Ball",
+        sections = {
+            {
+                title = "Auto Parry",
+                scripts = {
+                    { name = "Auto Parry + Visualizer", url = "https://raw.githubusercontent.com/Akash1al/Blade-Ball-Updated-Script/refs/heads/main/Blade-Ball-Script", warn = "não revisado por completo" },
+                },
+            },
+        },
+    },
+    {
+        tab = "🎮 Outros Jogos",
+        sections = {
+            {
+                title = "Murder Mystery 2",
+                scripts = {
+                    { name = "Eclipse Hub", url = "https://raw.githubusercontent.com/Ethanoj1/EclipseMM2/master/Script", warn = "copia texto para o clipboard" },
+                },
+            },
+        },
+    },
+}
+
+-- ============================================
+-- CARREGAR RAYFIELD (derruba instância antiga)
+-- ============================================
+if getgenv then
+    local old = getgenv().DarkHub
+    if old then
+        pcall(function() old:Destroy() end)
+    end
+end
+
+local okRay, Rayfield = pcall(function()
+    return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+end)
+
+if not okRay or not Rayfield then
+    warn("[Dark Hub] Falha ao carregar o Rayfield: " .. tostring(Rayfield))
+    return
+end
+
+if getgenv then
+    getgenv().DarkHub = Rayfield
+end
+
+local ICON = 4483362458
+
+local function Notify(title, content, duration)
+    pcall(function()
+        Rayfield:Notify({
+            Title = title,
+            Content = content,
+            Duration = duration or 3,
+            Image = ICON,
+        })
+    end)
+end
+
+-- ============================================
+-- EXECUTOR DE SCRIPTS (baixa, compila e roda com tratamento de erro)
+-- ============================================
+local running = {}
+
+local function Run(script)
+    if running[script.url] then
+        Notify("Aguarde", script.name .. " já está carregando")
+        return
+    end
+    running[script.url] = true
+    Notify("Carregando...", script.name)
+
+    task.spawn(function()
+        local okGet, src = pcall(function()
+            return game:HttpGet(script.url)
+        end)
+
+        if not okGet or type(src) ~= "string" or #src == 0 then
+            running[script.url] = nil
+            Notify("Erro ❌", "Não consegui baixar " .. script.name)
+            return
+        end
+
+        local fn = loadstring(src)
+        if not fn then
+            running[script.url] = nil
+            Notify("Erro ❌", script.name .. ": link morto ou conteúdo inválido")
+            return
+        end
+
+        local okRun, err = pcall(fn)
+        running[script.url] = nil
+
+        if okRun then
+            Notify("Executado ✅", script.name)
+        else
+            warn("[Dark Hub] " .. script.name .. ": " .. tostring(err))
+            Notify("Erro ❌", script.name .. " falhou ao executar")
+        end
+    end)
+end
+
+local function Label(script)
+    local text = script.name
+    if script.key then
+        text = "🔑 " .. text .. " (KEY)"
+    else
+        text = "⭐ " .. text
+    end
+    if script.warn then
+        text = text .. " ⚠️"
+    end
+    return text
+end
+
+-- ============================================
+-- JANELA
+-- ============================================
+local Window = Rayfield:CreateWindow({
+    Name = "🌑 Dark Hub",
+    LoadingTitle = "Dark Hub - Loading",
+    LoadingSubtitle = "Made by Syntax, Dark & Claude",
+    ConfigurationSaving = { Enabled = false },
+    Discord = { Enabled = false },
+    KeySystem = false,
+})
+
+-- Abas geradas a partir da tabela HUB
+local totalScripts = 0
+
+for _, game_ in ipairs(HUB) do
+    local Tab = Window:CreateTab(game_.tab, ICON)
+
+    for _, section in ipairs(game_.sections) do
+        Tab:CreateSection(section.title)
+
+        for _, script in ipairs(section.scripts) do
+            totalScripts = totalScripts + 1
+            Tab:CreateButton({
+                Name = Label(script),
+                Callback = function()
+                    if script.warn then
+                        Notify("Atenção ⚠️", script.name .. ": " .. script.warn, 4)
+                    end
+                    Run(script)
+                end,
+            })
+        end
+    end
+end
+
+-- ============================================
+-- ABA: CONFIGURAÇÕES
+-- ============================================
+local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
+
+ConfigTab:CreateSection("Informações")
+ConfigTab:CreateLabel("🌑 Dark Hub v3.1")
+ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
+ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
+ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
+
+ConfigTab:CreateSection("Legenda")
+ConfigTab:CreateParagraph({
+    Title = "🔑 KEY",
+    Content = "O script pede uma chave, normalmente obtida no Discord do criador.",
+})
+ConfigTab:CreateParagraph({
+    Title = "⭐ Sem key",
+    Content = "Não precisa de chave, é só executar.",
+})
+ConfigTab:CreateParagraph({
+    Title = "⚠️ Aviso",
+    Content = "O script tem uma observação (link não verificado, código ofuscado ou carrega código de outro servidor). Um aviso aparece ao clicar.",
+})
+
+ConfigTab:CreateSection("Ações")
+
+ConfigTab:CreateButton({
+    Name = "🔄 Recarregar Hub",
+    Callback = function()
+        if not HUB_URL then
+            Notify("Sem link", "Defina HUB_URL no topo do script para usar o recarregar", 4)
+            return
+        end
+        pcall(function() Rayfield:Destroy() end)
+        task.wait(0.5)
+        loadstring(game:HttpGet(HUB_URL))()
+    end,
+})
+
+ConfigTab:CreateButton({
+    Name = "❌ Fechar Hub",
+    Callback = function()
+        pcall(function() Rayfield:Destroy() end)
+    end,
+})
+
+ConfigTab:CreateSection("Suporte")
+ConfigTab:CreateParagraph({
+    Title = "💡 Como usar",
+    Content = "1. Escolha a aba do jogo\n2. Clique no script\n3. Aguarde carregar",
+})
+ConfigTab:CreateParagraph({
+    Title = "⚠️ Risco",
+    Content = "Cada botão executa código de terceiros. Isso pode causar ban ou comprometer sua conta. Use conta alternativa e só execute links em que você confia.",
+})
+
+Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
+print("[Dark Hub] v3.1 carregado: " .. totalScripts .. " scripts")
 
