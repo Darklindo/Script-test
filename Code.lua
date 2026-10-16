@@ -1,9 +1,9 @@
--- 🌑 DARK HUB v3.2
+-- 🌑 DARK HUB v3.5
 -- Hub de scripts (interface Rayfield) - Mobile e PC
 -- Made by Syntax, Dark & Claude
 --
 -- Para adicionar um script: acrescente uma linha na tabela HUB abaixo.
--- Campos: name, url (ou run = função local), key (true = precisa de key), warn (aviso curto)
+-- Campos: name, url (ou run = função local, ou toggle/dropdown), key, warn (aviso curto)
 
 -- Opcional: link RAW deste arquivo, usado pelo botão "Recarregar Hub"
 local HUB_URL = "https://raw.githubusercontent.com/Darklindo/Script-test/main/Code.lua"
@@ -13,6 +13,41 @@ local HUB_URL = "https://raw.githubusercontent.com/Darklindo/Script-test/main/Co
 -- Uma entrada com "run" executa a função e, se ela devolver texto,
 -- o texto é copiado para o clipboard.
 -- ============================================
+-- Pasta do workspace onde ficam os blocos de gelo (esteira local do jogo)
+local ICE_FOLDER = "ConveyorLocal"
+
+-- Verifica se "word" aparece como palavra no nome (evita "Device" casar com "ice")
+local function hasWord(name, word)
+    local lname = name:lower()
+    local start = 1
+    while true do
+        local i, j = lname:find(word, start, true)
+        if not i then
+            return false
+        end
+        local before = i > 1 and name:sub(i - 1, i - 1) or ""
+        local after = name:sub(j + 1, j + 1)
+        local first = name:sub(i, i)
+        local beforeOk = (i == 1) or not before:match("%a") or first:match("%u") ~= nil
+        local afterOk = (after == "") or not after:match("%l")
+            or (after == "s" and not name:sub(j + 2, j + 2):match("%l"))
+        if beforeOk and afterOk then
+            return true
+        end
+        start = i + 1
+    end
+end
+
+local function Say(title, text)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 5,
+        })
+    end)
+end
+
 local function ScanGame()
     local Players = game:GetService("Players")
     local RS = game:GetService("ReplicatedStorage")
@@ -23,50 +58,152 @@ local function ScanGame()
         local ok, p = pcall(function() return inst:GetFullName() end)
         return ok and p or tostring(inst)
     end
+    local function attrs(inst)
+        local ok, a = pcall(function() return inst:GetAttributes() end)
+        if not ok or not a then
+            return ""
+        end
+        local parts = {}
+        for k, v in pairs(a) do
+            parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
+        end
+        table.sort(parts)
+        return table.concat(parts, ", ")
+    end
+    local function describe(inst)
+        add(inst.ClassName .. " " .. path(inst))
+        local a = attrs(inst)
+        if a ~= "" then
+            add("  atributos: " .. a)
+        end
+        local n = 0
+        for _, c in ipairs(inst:GetChildren()) do
+            n = n + 1
+            if n > 15 then
+                add("  ... (mais filhos)")
+                break
+            end
+            local line = "  filho: " .. c.ClassName .. " " .. c.Name
+            if c:IsA("ValueBase") then
+                local ok, val = pcall(function() return c.Value end)
+                line = line .. " = " .. tostring(ok and val or "?")
+            end
+            local ca = attrs(c)
+            if ca ~= "" then
+                line = line .. " [" .. ca .. "]"
+            end
+            add(line)
+        end
+    end
+
+    local function dumpTree(inst, indent, depthLeft, counter)
+        if counter.n >= counter.max then
+            return
+        end
+        if inst:IsA("Decal") or inst:IsA("Texture") then
+            return
+        end
+        counter.n = counter.n + 1
+        local line = string.rep("  ", indent) .. inst.ClassName .. " " .. inst.Name
+        if inst:IsA("ValueBase") then
+            local ok, val = pcall(function() return inst.Value end)
+            line = line .. " = " .. tostring(ok and val or "?")
+        end
+        if inst:IsA("TextLabel") or inst:IsA("TextButton") then
+            line = line .. " '" .. tostring(inst.Text) .. "'"
+        end
+        local a = attrs(inst)
+        if a ~= "" then
+            line = line .. " [" .. a .. "]"
+        end
+        add(line)
+        if depthLeft > 0 then
+            for _, c in ipairs(inst:GetChildren()) do
+                dumpTree(c, indent + 1, depthLeft - 1, counter)
+            end
+        end
+    end
 
     add("=== SCAN DO JOGO ===")
     add("PlaceId: " .. tostring(game.PlaceId) .. " | GameId: " .. tostring(game.GameId))
 
     -- Remotes
     add("")
-    add("--- REMOTES (ReplicatedStorage) ---")
+    add("--- REMOTES (E=Event, F=Function; relativo a ReplicatedStorage) ---")
     local nRemotes = 0
     for _, d in ipairs(RS:GetDescendants()) do
         if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") or d.ClassName == "UnreliableRemoteEvent" then
             nRemotes = nRemotes + 1
-            if nRemotes <= 150 then
-                add(d.ClassName .. ": " .. path(d))
+            if nRemotes <= 600 then
+                local tag = d:IsA("RemoteFunction") and "F" or "E"
+                local full = path(d):gsub("^ReplicatedStorage%.", "")
+                add(tag .. " " .. full)
             end
         end
     end
     add("Total de remotes: " .. nRemotes)
 
-    -- Ferramentas (picareta etc.)
+    -- ReplicatedStorage (pastas de dados: peixes, picaretas, mundos, raridades...)
     add("")
-    add("--- FERRAMENTAS ---")
+    add("--- REPLICATEDSTORAGE (nivel 1 e conteudo) ---")
+    local rsN = 0
+    for _, c in ipairs(RS:GetChildren()) do
+        rsN = rsN + 1
+        if rsN > 80 then
+            add("... (mais omitidos)")
+            break
+        end
+        local names, k = {}, 0
+        for _, cc in ipairs(c:GetChildren()) do
+            k = k + 1
+            if k > 25 then
+                names[#names + 1] = "..."
+                break
+            end
+            names[#names + 1] = cc.Name
+        end
+        add(c.ClassName .. ": " .. c.Name .. " -> " .. table.concat(names, ", "))
+    end
+
+    -- Jogador
+    add("")
+    add("--- JOGADOR ---")
+    local pa = attrs(lp)
+    add("Atributos do jogador: " .. (pa ~= "" and pa or "(nenhum)"))
+    local ls = lp:FindFirstChild("leaderstats")
+    if ls then
+        for _, v in ipairs(ls:GetChildren()) do
+            local ok, val = pcall(function() return v.Value end)
+            add("leaderstat " .. v.ClassName .. " " .. v.Name .. " = " .. tostring(ok and val or "?"))
+        end
+    else
+        add("(sem leaderstats)")
+    end
     local containers = { lp:FindFirstChild("Backpack"), lp.Character }
     for ci = 1, 2 do
         local container = containers[ci]
         if container then
             for _, t in ipairs(container:GetChildren()) do
                 if t:IsA("Tool") then
-                    add("Tool: " .. t.Name .. " (em " .. container.Name .. ")")
+                    local ta = attrs(t)
+                    add("Tool: " .. t.Name .. " (em " .. container.Name .. ")" .. (ta ~= "" and (" [" .. ta .. "]") or ""))
                 end
             end
         end
     end
 
-    -- Stats do jogador
     add("")
-    add("--- LEADERSTATS ---")
-    local ls = lp:FindFirstChild("leaderstats")
-    if ls then
-        for _, v in ipairs(ls:GetChildren()) do
-            local ok, val = pcall(function() return v.Value end)
-            add(v.ClassName .. " " .. v.Name .. " = " .. tostring(ok and val or "?"))
+    add("--- FERRAMENTA EM DETALHE (scripts, atributos, remotes dentro dela) ---")
+    for ci = 1, 2 do
+        local container = containers[ci]
+        if container then
+            for _, t in ipairs(container:GetChildren()) do
+                if t:IsA("Tool") then
+                    dumpTree(t, 0, 3, { n = 0, max = 40 })
+                    break
+                end
+            end
         end
-    else
-        add("(sem leaderstats)")
     end
 
     -- Interface
@@ -78,9 +215,21 @@ local function ScanGame()
             local en = g:IsA("ScreenGui") and tostring(g.Enabled) or "-"
             add(g.ClassName .. ": " .. g.Name .. " (Enabled=" .. en .. ")")
         end
+        add("")
+        add("--- BOTOES NA INTERFACE ---")
+        local bN = 0
+        for _, d in ipairs(pg:GetDescendants()) do
+            if d:IsA("TextButton") or d:IsA("ImageButton") then
+                local txt = d:IsA("TextButton") and d.Text or ""
+                bN = bN + 1
+                if bN <= 60 then
+                    add(d.ClassName .. " '" .. txt .. "' " .. path(d))
+                end
+            end
+        end
     end
 
-    -- Workspace (nível superior)
+    -- Workspace (nivel superior)
     add("")
     add("--- WORKSPACE (nivel superior) ---")
     local shown = 0
@@ -92,30 +241,78 @@ local function ScanGame()
     end
     add("Total no nivel superior: " .. shown)
 
-    -- Busca por palavras-chave + ProximityPrompts
+    -- Esteira de gelo
     add("")
-    add("--- OBJETOS COM NOMES RELEVANTES (agrupados) ---")
-    local keywords = { "ice", "fish", "pickaxe", "sell", "collect", "aquarium", "cash", "river" }
+    add("--- ESTEIRA DE GELO (" .. ICE_FOLDER .. ") ---")
+    local conv = workspace:FindFirstChild(ICE_FOLDER)
+    if conv then
+        local kids = conv:GetChildren()
+        add("Blocos agora: " .. #kids .. " | atributos da pasta: " .. attrs(conv))
+        for n, blk in ipairs(kids) do
+            if n > 3 then
+                break
+            end
+            add("# bloco " .. n)
+            dumpTree(blk, 0, 4, { n = 0, max = 60 })
+        end
+    else
+        add("(pasta não encontrada neste mundo)")
+    end
+
+    -- Mundos e portais
+    add("")
+    add("--- MUNDOS E PORTAIS ---")
+    for _, nm in ipairs({ "Worlds", "WorldPortals", "TrainingPortals", "BossPortals" }) do
+        local f = workspace:FindFirstChild(nm)
+        if f then
+            local names = {}
+            for n, c in ipairs(f:GetChildren()) do
+                if n > 25 then
+                    names[#names + 1] = "..."
+                    break
+                end
+                names[#names + 1] = c.Name
+            end
+            add(nm .. ": " .. table.concat(names, ", "))
+        end
+    end
+    local wp = workspace:FindFirstChild("WorldPortals")
+    local firstPortal = wp and wp:GetChildren()[1]
+    if firstPortal then
+        add("# primeiro portal em detalhe")
+        dumpTree(firstPortal, 0, 3, { n = 0, max = 40 })
+    end
+    local pgui = lp:FindFirstChildOfClass("PlayerGui")
+    local wpui = pgui and pgui:FindFirstChild("WorldPortalUI")
+    if wpui then
+        add("# WorldPortalUI em detalhe")
+        dumpTree(wpui, 0, 5, { n = 0, max = 90 })
+    end
+
+    -- Busca por palavras-chave e ProximityPrompts
+    local keywords = {
+        "ice", "fish", "pickaxe", "sell", "collect", "aquarium",
+        "cash", "river", "world", "portal", "teleport", "rebirth", "unlock",
+    }
     local groups, order = {}, {}
     local prompts, pOrder = {}, {}
     local i = 0
     for _, d in ipairs(workspace:GetDescendants()) do
         i = i + 1
-        if i % 3000 == 0 then task.wait() end
-
-        local lname = d.Name:lower()
+        if i % 3000 == 0 then
+            task.wait()
+        end
         for _, k in ipairs(keywords) do
-            if lname:find(k, 1, true) then
+            if hasWord(d.Name, k) then
                 local key = d.ClassName .. ":" .. d.Name
                 if not groups[key] then
-                    groups[key] = { count = 0, first = path(d) }
+                    groups[key] = { count = 0, first = path(d), inst = d }
                     order[#order + 1] = key
                 end
                 groups[key].count = groups[key].count + 1
                 break
             end
         end
-
         if d:IsA("ProximityPrompt") then
             local key = tostring(d.ActionText) .. " | " .. tostring(d.ObjectText) .. " | pai: " .. (d.Parent and d.Parent.Name or "?")
             if not prompts[key] then
@@ -125,15 +322,33 @@ local function ScanGame()
             prompts[key].count = prompts[key].count + 1
         end
     end
+
+    add("")
+    add("--- OBJETOS COM NOMES RELEVANTES (agrupados) ---")
     for n, key in ipairs(order) do
-        if n > 80 then add("... (mais grupos omitidos)") break end
+        if n > 80 then
+            add("... (mais grupos omitidos)")
+            break
+        end
         add(key .. " x" .. groups[key].count .. "  ex: " .. groups[key].first)
+    end
+
+    add("")
+    add("--- AMOSTRAS DETALHADAS (atributos e filhos) ---")
+    for n, key in ipairs(order) do
+        if n > 14 then
+            break
+        end
+        pcall(describe, groups[key].inst)
     end
 
     add("")
     add("--- PROXIMITY PROMPTS ---")
     for n, key in ipairs(pOrder) do
-        if n > 40 then add("... (mais omitidos)") break end
+        if n > 40 then
+            add("... (mais omitidos)")
+            break
+        end
         add(key .. " x" .. prompts[key].count .. "  ex: " .. prompts[key].first)
     end
 
@@ -156,6 +371,422 @@ local function AntiAFK()
     end)
 end
 
+-- Grava chamadas de remotes por alguns segundos:
+--   C>S = o jogo (ou você) chamando FireServer/InvokeServer
+--   S>C = o servidor mandando dados para o cliente (ids dos blocos, raridade etc.)
+-- Quebre gelo / venda / viaje de mundo à mão durante a gravação.
+local function RemoteLog(seconds)
+    local G = getgenv and getgenv() or _G
+    local RS = game:GetService("ReplicatedStorage")
+
+    local function ser(v, depth)
+        local t = typeof(v)
+        if t == "string" then
+            return '"' .. v:sub(1, 40) .. '"'
+        elseif t == "number" or t == "boolean" or t == "nil" then
+            return tostring(v)
+        elseif t == "Instance" then
+            return "<" .. v:GetFullName() .. ">"
+        elseif t == "table" then
+            if depth >= 2 then
+                return "{...}"
+            end
+            local parts, n = {}, 0
+            for k, val in pairs(v) do
+                n = n + 1
+                if n > 10 then
+                    parts[#parts + 1] = "..."
+                    break
+                end
+                parts[#parts + 1] = tostring(k) .. "=" .. ser(val, depth + 1)
+            end
+            return "{" .. table.concat(parts, ", ") .. "}"
+        end
+        return t .. ":" .. tostring(v)
+    end
+
+    local state = { active = true, data = {}, order = {} }
+
+    -- guarda no máximo 3 exemplos distintos por remote
+    function state.record(dir, name, args)
+        local key = dir .. " " .. name
+        local rec = state.data[key]
+        if not rec then
+            if #state.order >= 80 then
+                return
+            end
+            rec = { count = 0, samples = {}, seen = {} }
+            state.data[key] = rec
+            state.order[#state.order + 1] = key
+        end
+        rec.count = rec.count + 1
+        if #rec.samples < 3 then
+            local parts = {}
+            for i = 1, args.n do
+                parts[i] = ser(args[i], 0)
+            end
+            local text = "(" .. table.concat(parts, ", ") .. ")"
+            if not rec.seen[text] then
+                rec.seen[text] = true
+                rec.samples[#rec.samples + 1] = text
+            end
+        end
+    end
+
+    G.DarkHubRemoteLog = state
+
+    -- Servidor -> cliente: escuta passiva dos grupos que interessam
+    local conns = {}
+    local remotes = RS:FindFirstChild("Remotes")
+    local watch = { "Conveyor", "Ice", "Pickaxe", "World", "Travel", "Shop", "Rebirth", "Inventory", "Aquarium", "Plot", "Index" }
+    if remotes then
+        for _, folderName in ipairs(watch) do
+            local f = remotes:FindFirstChild(folderName)
+            if f then
+                for _, r in ipairs(f:GetChildren()) do
+                    if r:IsA("RemoteEvent") then
+                        local label = folderName .. "." .. r.Name
+                        conns[#conns + 1] = r.OnClientEvent:Connect(function(...)
+                            if state.active then
+                                state.record("S>C", label, table.pack(...))
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    -- Cliente -> servidor: precisa de hookmetamethod
+    local hookNote = nil
+    if hookmetamethod and getnamecallmethod then
+        if not G.DarkHubRemoteHooked then
+            G.DarkHubRemoteHooked = true
+            local old
+            local function handler(self, ...)
+                local st = G.DarkHubRemoteLog
+                if st and st.active then
+                    local m = getnamecallmethod()
+                    if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
+                        local cn = self.ClassName
+                        if cn == "RemoteEvent" or cn == "RemoteFunction" then
+                            local args = table.pack(...)
+                            pcall(function()
+                                local full = self:GetFullName():gsub("^ReplicatedStorage%.Remotes%.", "")
+                                st.record("C>S", full, args)
+                            end)
+                        end
+                    end
+                end
+                return old(self, ...)
+            end
+            local okHook, res = pcall(function()
+                return hookmetamethod(game, "__namecall", newcclosure and newcclosure(handler) or handler)
+            end)
+            if okHook then
+                old = res
+            else
+                G.DarkHubRemoteHooked = nil
+                hookNote = "Falha ao instalar o hook (C>S indisponível): " .. tostring(res)
+            end
+        end
+    else
+        hookNote = "Executor sem hookmetamethod: só aparecem as chamadas servidor>cliente (S>C)."
+    end
+
+    Say("Gravando remotes", "Quebre gelo, venda e viaje à mão por " .. seconds .. "s")
+    task.wait(seconds)
+
+    state.active = false
+    for _, c in ipairs(conns) do
+        pcall(function() c:Disconnect() end)
+    end
+
+    local lines = { "=== REMOTES GRAVADOS (" .. seconds .. "s) ===" }
+    if hookNote then
+        lines[#lines + 1] = hookNote
+    end
+    for _, key in ipairs(state.order) do
+        local rec = state.data[key]
+        lines[#lines + 1] = key .. " x" .. rec.count .. "  " .. table.concat(rec.samples, " | ")
+    end
+    if #state.order == 0 then
+        lines[#lines + 1] = "Nada foi gravado."
+    end
+    lines[#lines + 1] = "=== FIM ==="
+    return table.concat(lines, "\n")
+end
+
+-- ============================================
+-- AUTO FARM (EXPERIMENTAL) - Resgate um Peixe
+-- Baseado em heurísticas: ajuste CFG depois do scanner.
+-- ============================================
+local CFG = {
+    IceFolder = ICE_FOLDER,                                    -- pasta com os blocos de gelo
+    RarityAttrs = { "rarity", "tier", "fishrarity", "rank" },  -- atributos/valores com a raridade
+    RarityOrder = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret" },
+    WorldKeywords = { "next world", "new world", "unlock world", "portal" },
+    HitDelay = 0.25,
+    WorldDelay = 8,
+}
+
+local Farm = {
+    ice = false,
+    world = false,
+    minRarity = 0,      -- 0 = todas
+    hitUnknown = true,  -- quebrar gelo sem raridade detectada
+    cache = {},
+    conns = {},
+}
+
+local function lp_()
+    return game:GetService("Players").LocalPlayer
+end
+
+-- Cada filho da esteira é um bloco; só conta se tiver um "Ice" dentro.
+local function iceTargets()
+    local list = {}
+    local folder = workspace:FindFirstChild(CFG.IceFolder)
+    if folder then
+        for _, blk in ipairs(folder:GetChildren()) do
+            if blk:IsA("Model") and blk:FindFirstChild("Ice", true) then
+                list[#list + 1] = blk
+            end
+        end
+    end
+    return list
+end
+
+local function rarityIndex(inst)
+    local function norm(v)
+        if type(v) == "number" then
+            return v
+        end
+        if type(v) == "string" then
+            local lv = v:lower()
+            for idx, r in ipairs(CFG.RarityOrder) do
+                local lr = r:lower()
+                if lv == lr or lv:find(lr, 1, true) then
+                    return idx
+                end
+            end
+        end
+        return nil
+    end
+    local function scan(obj)
+        for k, v in pairs(obj:GetAttributes()) do
+            local lk = tostring(k):lower()
+            for _, a in ipairs(CFG.RarityAttrs) do
+                if lk == a then
+                    local r = norm(v)
+                    if r then
+                        return r
+                    end
+                end
+            end
+        end
+        for _, c in ipairs(obj:GetChildren()) do
+            if c:IsA("ValueBase") then
+                local ln = c.Name:lower()
+                for _, a in ipairs(CFG.RarityAttrs) do
+                    if ln == a then
+                        local r = norm(c.Value)
+                        if r then
+                            return r
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+    local r = scan(inst)
+    if r then
+        return r
+    end
+    for _, d in ipairs(inst:GetDescendants()) do
+        r = scan(d)
+        if r then
+            return r
+        end
+    end
+    return nil
+end
+
+local rcache = setmetatable({}, { __mode = "k" })
+
+local function rarityOk(inst)
+    local r = rcache[inst]
+    if r == nil then
+        r = rarityIndex(inst)
+        if r then
+            rcache[inst] = r
+        end
+    end
+    if r == nil then
+        return Farm.hitUnknown
+    end
+    return r >= Farm.minRarity
+end
+
+local function getPivotPos(inst)
+    local ok, cf = pcall(function() return inst:GetPivot() end)
+    if ok then
+        return cf
+    end
+    return nil
+end
+
+local function hitIce(target)
+    local char = lp_().Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not (root and hum) then
+        return
+    end
+    local cf = getPivotPos(target)
+    if not cf then
+        return
+    end
+    root.CFrame = cf + Vector3.new(0, 4, 0)
+
+    local tool = char:FindFirstChildOfClass("Tool")
+    if not tool then
+        local bp = lp_():FindFirstChild("Backpack")
+        if bp then
+            for _, t in ipairs(bp:GetChildren()) do
+                if t:IsA("Tool") and t.Name:lower():find("pick", 1, true) then
+                    tool = t
+                    break
+                end
+            end
+            tool = tool or bp:FindFirstChildOfClass("Tool")
+        end
+        if tool then
+            pcall(function() hum:EquipTool(tool) end)
+        end
+    end
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+
+    for _, d in ipairs(target:GetDescendants()) do
+        if d:IsA("ProximityPrompt") and fireproximityprompt then
+            pcall(fireproximityprompt, d)
+        elseif d:IsA("ClickDetector") and fireclickdetector then
+            pcall(fireclickdetector, d)
+        end
+    end
+end
+
+local function iceLoop()
+    while Farm.ice do
+        local char = lp_().Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if root then
+            local best, bestDist
+            for _, inst in ipairs(iceTargets()) do
+                if rarityOk(inst) then
+                    local cf = getPivotPos(inst)
+                    if cf then
+                        local d = (cf.Position - root.Position).Magnitude
+                        if not bestDist or d < bestDist then
+                            best, bestDist = inst, d
+                        end
+                    end
+                end
+            end
+            if best then
+                hitIce(best)
+            end
+        end
+        task.wait(CFG.HitDelay)
+    end
+end
+
+local function textMatchesWorld(s)
+    s = s:lower()
+    for _, k in ipairs(CFG.WorldKeywords) do
+        if s:find(k, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+local function worldLoop()
+    while Farm.world do
+        local char = lp_().Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+
+        -- Prompts no mundo
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if not Farm.world then
+                break
+            end
+            if d:IsA("ProximityPrompt") and d.Enabled then
+                local label = tostring(d.ActionText) .. " " .. tostring(d.ObjectText) .. " " .. (d.Parent and d.Parent.Name or "")
+                if textMatchesWorld(label) and fireproximityprompt then
+                    local par = d.Parent
+                    if root and par and (par:IsA("BasePart") or par:IsA("Model")) then
+                        local cf = getPivotPos(par)
+                        if cf then
+                            root.CFrame = cf + Vector3.new(0, 3, 0)
+                        end
+                    end
+                    pcall(fireproximityprompt, d)
+                    print("[Dark Hub] Prompt de mundo: " .. label)
+                end
+            end
+        end
+
+        -- Botões na interface
+        local pg = lp_():FindFirstChildOfClass("PlayerGui")
+        if pg and getconnections then
+            for _, b in ipairs(pg:GetDescendants()) do
+                if b:IsA("TextButton") and b.Visible and textMatchesWorld(b.Text) then
+                    for _, ev in ipairs({ b.MouseButton1Click, b.Activated }) do
+                        local okc, conns = pcall(getconnections, ev)
+                        if okc and conns then
+                            for _, c in ipairs(conns) do
+                                pcall(function() c:Fire() end)
+                            end
+                        end
+                    end
+                    print("[Dark Hub] Botão de mundo: " .. b.Text)
+                end
+            end
+        end
+
+        task.wait(CFG.WorldDelay)
+    end
+end
+
+local function SetAutoIce(on)
+    if on == Farm.ice then
+        return
+    end
+    Farm.ice = on
+    if on then
+        task.spawn(iceLoop)
+    end
+end
+
+local function SetAutoWorld(on)
+    if on == Farm.world then
+        return
+    end
+    Farm.world = on
+    if on then
+        task.spawn(worldLoop)
+    end
+end
+
+local RARITY_OPTIONS = { "Todas" }
+for _, r in ipairs(CFG.RarityOrder) do
+    RARITY_OPTIONS[#RARITY_OPTIONS + 1] = r
+end
+
 -- ============================================
 -- DADOS
 -- ============================================
@@ -164,9 +795,36 @@ local HUB = {
         tab = "🐟 Resgate um Peixe",
         sections = {
             {
-                title = "Diagnóstico",
+                title = "Diagnóstico (rode primeiro)",
                 scripts = {
                     { name = "Scanner do jogo (copia o resultado)", run = ScanGame },
+                    { name = "Gravar remotes por 45s (quebre gelo/venda/viaje à mão)", run = function() return RemoteLog(45) end },
+                },
+            },
+            {
+                title = "Auto Farm (experimental)",
+                scripts = {
+                    { name = "Auto quebrar gelo", toggle = SetAutoIce },
+                    {
+                        name = "Raridade mínima",
+                        dropdown = {
+                            options = RARITY_OPTIONS,
+                            default = "Todas",
+                            onChange = function(opt)
+                                for idx, label in ipairs(RARITY_OPTIONS) do
+                                    if label == opt then
+                                        Farm.minRarity = idx - 1
+                                    end
+                                end
+                            end,
+                        },
+                    },
+                    {
+                        name = "Quebrar gelo sem raridade detectada",
+                        toggle = function(on) Farm.hitUnknown = on end,
+                        default = true,
+                    },
+                    { name = "Auto passar de mundo", toggle = SetAutoWorld },
                 },
             },
             {
@@ -430,15 +1088,40 @@ for _, game_ in ipairs(HUB) do
 
         for _, script in ipairs(section.scripts) do
             totalScripts = totalScripts + 1
-            Tab:CreateButton({
-                Name = Label(script),
-                Callback = function()
-                    if script.warn then
-                        Notify("Atenção ⚠️", script.name .. ": " .. script.warn, 4)
-                    end
-                    Run(script)
-                end,
-            })
+            if script.toggle then
+                Tab:CreateToggle({
+                    Name = script.name,
+                    CurrentValue = script.default == true,
+                    Callback = function(value)
+                        local ok, err = pcall(script.toggle, value)
+                        if not ok then
+                            warn("[Dark Hub] " .. script.name .. ": " .. tostring(err))
+                            Notify("Erro ❌", script.name .. " falhou")
+                        end
+                    end,
+                })
+            elseif script.dropdown then
+                Tab:CreateDropdown({
+                    Name = script.name,
+                    Options = script.dropdown.options,
+                    CurrentOption = { script.dropdown.default },
+                    MultipleOptions = false,
+                    Callback = function(opt)
+                        local v = type(opt) == "table" and opt[1] or opt
+                        pcall(script.dropdown.onChange, v)
+                    end,
+                })
+            else
+                Tab:CreateButton({
+                    Name = Label(script),
+                    Callback = function()
+                        if script.warn then
+                            Notify("Atenção ⚠️", script.name .. ": " .. script.warn, 4)
+                        end
+                        Run(script)
+                    end,
+                })
+            end
         end
     end
 end
@@ -449,7 +1132,7 @@ end
 local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
 
 ConfigTab:CreateSection("Informações")
-ConfigTab:CreateLabel("🌑 Dark Hub v3.2")
+ConfigTab:CreateLabel("🌑 Dark Hub v3.5")
 ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
 ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
 ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
@@ -501,4 +1184,4 @@ ConfigTab:CreateParagraph({
 })
 
 Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
-print("[Dark Hub] v3.2 carregado: " .. totalScripts .. " scripts")
+print("[Dark Hub] v3.5 carregado: " .. totalScripts .. " scripts")
