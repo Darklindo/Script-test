@@ -1,4 +1,4 @@
--- 🌑 DARK HUB v3.5
+-- 🌑 DARK HUB v3.6
 -- Hub de scripts (interface Rayfield) - Mobile e PC
 -- Made by Syntax, Dark & Claude
 --
@@ -353,6 +353,90 @@ local function ScanGame()
     end
 
     add("")
+    add("--- RARIDADES VISTAS (cartaz dos blocos + atributo Rarity nas ferramentas) ---")
+    local seenR, listR = {}, {}
+    local function seeR(r)
+        if r and r ~= "" and not seenR[r] then
+            seenR[r] = true
+            listR[#listR + 1] = r
+        end
+    end
+    if conv then
+        for _, blk in ipairs(conv:GetChildren()) do
+            local bb = blk:FindFirstChild("PetBillboard", true)
+            local lbl = bb and bb:FindFirstChild("Rarity", true)
+            if lbl and lbl:IsA("TextLabel") then
+                seeR(lbl.Text)
+            end
+        end
+    end
+    for ci = 1, 2 do
+        local container = containers[ci]
+        if container then
+            for _, t in ipairs(container:GetChildren()) do
+                local r = t:GetAttribute("Rarity")
+                if r then
+                    seeR(tostring(r))
+                end
+            end
+        end
+    end
+    add(table.concat(listR, ", "))
+
+    -- Módulos de dados (ordem das raridades, tabelas do gelo e dos mundos)
+    local function serv(v, d)
+        local t = typeof(v)
+        if t == "string" then
+            return '"' .. v:sub(1, 30) .. '"'
+        elseif t == "number" or t == "boolean" or t == "nil" then
+            return tostring(v)
+        elseif t == "table" then
+            if d >= 3 then
+                return "{...}"
+            end
+            local parts, n = {}, 0
+            for k, val in pairs(v) do
+                n = n + 1
+                if n > 40 then
+                    parts[#parts + 1] = "..."
+                    break
+                end
+                parts[#parts + 1] = tostring(k) .. "=" .. serv(val, d + 1)
+            end
+            return "{" .. table.concat(parts, ", ") .. "}"
+        end
+        return t
+    end
+    add("")
+    add("--- MODULOS DE DADOS (ReplicatedStorage.Shared) ---")
+    local shared = RS:FindFirstChild("Shared")
+    for _, nm in ipairs({ "Quality", "Ice", "World" }) do
+        local m = shared and shared:FindFirstChild(nm)
+        if m then
+            add("# Shared." .. nm .. " (" .. m.ClassName .. ")")
+            local mods = {}
+            if m:IsA("ModuleScript") then
+                mods[1] = m
+            else
+                for _, c in ipairs(m:GetChildren()) do
+                    if c:IsA("ModuleScript") and #mods < 4 then
+                        mods[#mods + 1] = c
+                    end
+                end
+            end
+            for _, mod in ipairs(mods) do
+                local okReq, data = pcall(require, mod)
+                if okReq then
+                    local text = serv(data, 0)
+                    add(mod.Name .. " = " .. text:sub(1, 1800))
+                else
+                    add(mod.Name .. ": require falhou (" .. tostring(data) .. ")")
+                end
+            end
+        end
+    end
+
+    add("")
     add("=== FIM DO SCAN ===")
     return table.concat(out, "\n")
 end
@@ -523,8 +607,7 @@ end
 -- ============================================
 local CFG = {
     IceFolder = ICE_FOLDER,                                    -- pasta com os blocos de gelo
-    RarityAttrs = { "rarity", "tier", "fishrarity", "rank" },  -- atributos/valores com a raridade
-    RarityOrder = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret" },
+    Rarities = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Godly", "Prismatic", "Celestial", "Secret" },
     WorldKeywords = { "next world", "new world", "unlock world", "portal" },
     HitDelay = 0.25,
     WorldDelay = 8,
@@ -533,11 +616,17 @@ local CFG = {
 local Farm = {
     ice = false,
     world = false,
-    minRarity = 0,      -- 0 = todas
-    hitUnknown = true,  -- quebrar gelo sem raridade detectada
+    allowed = {},       -- raridades marcadas (minúsculas)
+    known = {},         -- raridades da lista (minúsculas)
+    hitUnknown = true,  -- quebrar raridade fora da lista / não detectada
     cache = {},
     conns = {},
 }
+
+for _, r in ipairs(CFG.Rarities) do
+    Farm.allowed[r:lower()] = true
+    Farm.known[r:lower()] = true
+end
 
 local function lp_()
     return game:GetService("Players").LocalPlayer
@@ -557,76 +646,29 @@ local function iceTargets()
     return list
 end
 
-local function rarityIndex(inst)
-    local function norm(v)
-        if type(v) == "number" then
-            return v
-        end
-        if type(v) == "string" then
-            local lv = v:lower()
-            for idx, r in ipairs(CFG.RarityOrder) do
-                local lr = r:lower()
-                if lv == lr or lv:find(lr, 1, true) then
-                    return idx
-                end
-            end
-        end
-        return nil
-    end
-    local function scan(obj)
-        for k, v in pairs(obj:GetAttributes()) do
-            local lk = tostring(k):lower()
-            for _, a in ipairs(CFG.RarityAttrs) do
-                if lk == a then
-                    local r = norm(v)
-                    if r then
-                        return r
-                    end
-                end
-            end
-        end
-        for _, c in ipairs(obj:GetChildren()) do
-            if c:IsA("ValueBase") then
-                local ln = c.Name:lower()
-                for _, a in ipairs(CFG.RarityAttrs) do
-                    if ln == a then
-                        local r = norm(c.Value)
-                        if r then
-                            return r
-                        end
-                    end
-                end
-            end
-        end
-        return nil
-    end
-    local r = scan(inst)
-    if r then
-        return r
-    end
-    for _, d in ipairs(inst:GetDescendants()) do
-        r = scan(d)
-        if r then
-            return r
+-- A raridade fica no cartaz do bloco: Anchor > PetBillboard > Content > Rarity (TextLabel)
+local function blockRarity(block)
+    local bb = block:FindFirstChild("PetBillboard", true)
+    local lbl = bb and bb:FindFirstChild("Rarity", true)
+    if lbl and lbl:IsA("TextLabel") then
+        local t = lbl.Text:gsub("^%s+", ""):gsub("%s+$", "")
+        if t ~= "" then
+            return t
         end
     end
     return nil
 end
 
-local rcache = setmetatable({}, { __mode = "k" })
-
-local function rarityOk(inst)
-    local r = rcache[inst]
-    if r == nil then
-        r = rarityIndex(inst)
-        if r then
-            rcache[inst] = r
-        end
-    end
-    if r == nil then
+local function rarityOk(block)
+    local name = blockRarity(block)
+    if not name then
         return Farm.hitUnknown
     end
-    return r >= Farm.minRarity
+    local key = name:lower()
+    if not Farm.known[key] then
+        return Farm.hitUnknown
+    end
+    return Farm.allowed[key] == true
 end
 
 local function getPivotPos(inst)
@@ -782,10 +824,7 @@ local function SetAutoWorld(on)
     end
 end
 
-local RARITY_OPTIONS = { "Todas" }
-for _, r in ipairs(CFG.RarityOrder) do
-    RARITY_OPTIONS[#RARITY_OPTIONS + 1] = r
-end
+local RARITY_OPTIONS = CFG.Rarities
 
 -- ============================================
 -- DADOS
@@ -806,21 +845,21 @@ local HUB = {
                 scripts = {
                     { name = "Auto quebrar gelo", toggle = SetAutoIce },
                     {
-                        name = "Raridade mínima",
+                        name = "Raridades para quebrar",
                         dropdown = {
                             options = RARITY_OPTIONS,
-                            default = "Todas",
-                            onChange = function(opt)
-                                for idx, label in ipairs(RARITY_OPTIONS) do
-                                    if label == opt then
-                                        Farm.minRarity = idx - 1
-                                    end
+                            default = RARITY_OPTIONS,
+                            multi = true,
+                            onChange = function(selected)
+                                Farm.allowed = {}
+                                for _, n in ipairs(selected) do
+                                    Farm.allowed[tostring(n):lower()] = true
                                 end
                             end,
                         },
                     },
                     {
-                        name = "Quebrar gelo sem raridade detectada",
+                        name = "Quebrar raridade fora da lista",
                         toggle = function(on) Farm.hitUnknown = on end,
                         default = true,
                     },
@@ -1101,14 +1140,18 @@ for _, game_ in ipairs(HUB) do
                     end,
                 })
             elseif script.dropdown then
+                local dd = script.dropdown
                 Tab:CreateDropdown({
                     Name = script.name,
-                    Options = script.dropdown.options,
-                    CurrentOption = { script.dropdown.default },
-                    MultipleOptions = false,
+                    Options = dd.options,
+                    CurrentOption = dd.multi and dd.default or { dd.default },
+                    MultipleOptions = dd.multi == true,
                     Callback = function(opt)
-                        local v = type(opt) == "table" and opt[1] or opt
-                        pcall(script.dropdown.onChange, v)
+                        if dd.multi then
+                            pcall(dd.onChange, type(opt) == "table" and opt or { opt })
+                        else
+                            pcall(dd.onChange, type(opt) == "table" and opt[1] or opt)
+                        end
                     end,
                 })
             else
@@ -1132,7 +1175,7 @@ end
 local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
 
 ConfigTab:CreateSection("Informações")
-ConfigTab:CreateLabel("🌑 Dark Hub v3.5")
+ConfigTab:CreateLabel("🌑 Dark Hub v3.6")
 ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
 ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
 ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
@@ -1184,4 +1227,4 @@ ConfigTab:CreateParagraph({
 })
 
 Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
-print("[Dark Hub] v3.5 carregado: " .. totalScripts .. " scripts")
+print("[Dark Hub] v3.6 carregado: " .. totalScripts .. " scripts")
