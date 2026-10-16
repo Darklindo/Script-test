@@ -1,4 +1,4 @@
--- 🌑 DARK HUB v3.6
+-- 🌑 DARK HUB v3.7
 -- Hub de scripts (interface Rayfield) - Mobile e PC
 -- Made by Syntax, Dark & Claude
 --
@@ -517,7 +517,7 @@ local function RemoteLog(seconds)
         end
     end
 
-    G.DarkHubRemoteLog = state
+    G.DarkHubRL2 = state
 
     -- Servidor -> cliente: escuta passiva dos grupos que interessam
     local conns = {}
@@ -544,22 +544,38 @@ local function RemoteLog(seconds)
     -- Cliente -> servidor: precisa de hookmetamethod
     local hookNote = nil
     if hookmetamethod and getnamecallmethod then
-        if not G.DarkHubRemoteHooked then
-            G.DarkHubRemoteHooked = true
+        if not G.DarkHubRL2Hooked then
+            G.DarkHubRL2Hooked = true
+            -- Caminho do remote lendo só PROPRIEDADES (Name/Parent). Chamar métodos
+            -- (ex.: GetFullName) dentro do hook troca o método "FireServer" e o
+            -- jogo deixa de enviar a chamada de verdade.
+            local function pathOf(inst)
+                local parts, cur, guard = {}, inst, 0
+                while cur and cur ~= game and guard < 12 do
+                    table.insert(parts, 1, cur.Name)
+                    cur = cur.Parent
+                    guard = guard + 1
+                end
+                return (table.concat(parts, "."):gsub("^ReplicatedStorage%.Remotes%.", ""))
+            end
             local old
             local function handler(self, ...)
-                local st = G.DarkHubRemoteLog
+                local st = G.DarkHubRL2
                 if st and st.active then
                     local m = getnamecallmethod()
                     if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
                         local cn = self.ClassName
                         if cn == "RemoteEvent" or cn == "RemoteFunction" then
                             local args = table.pack(...)
-                            pcall(function()
-                                local full = self:GetFullName():gsub("^ReplicatedStorage%.Remotes%.", "")
-                                st.record("C>S", full, args)
+                            local name = pathOf(self)
+                            -- grava depois, fora do hook
+                            task.defer(function()
+                                pcall(st.record, "C>S", name, args)
                             end)
                         end
+                    end
+                    if m and setnamecallmethod then
+                        setnamecallmethod(m)
                     end
                 end
                 return old(self, ...)
@@ -570,7 +586,7 @@ local function RemoteLog(seconds)
             if okHook then
                 old = res
             else
-                G.DarkHubRemoteHooked = nil
+                G.DarkHubRL2Hooked = nil
                 hookNote = "Falha ao instalar o hook (C>S indisponível): " .. tostring(res)
             end
         end
@@ -607,8 +623,12 @@ end
 -- ============================================
 local CFG = {
     IceFolder = ICE_FOLDER,                                    -- pasta com os blocos de gelo
-    Rarities = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Godly", "Prismatic", "Celestial", "Secret" },
-    WorldKeywords = { "next world", "new world", "unlock world", "portal" },
+    -- Ordem real das raridades (ReplicatedStorage.Shared.World.WorldLadder.Names)
+    Rarities = {
+        "Common", "Rare", "Epic", "Legendary", "Exotic", "Godly", "Prismatic", "Celestial",
+        "Transcendent", "Ethereal", "Genesis", "Mythic", "Eternal", "Sovereign", "Ascendant",
+        "Primordial", "Abyssal", "Astral", "Paradox", "Infinite", "Omniscient", "Mythos", "Absolute",
+    },
     HitDelay = 0.25,
     WorldDelay = 8,
 }
@@ -616,16 +636,15 @@ local CFG = {
 local Farm = {
     ice = false,
     world = false,
-    allowed = {},       -- raridades marcadas (minúsculas)
-    known = {},         -- raridades da lista (minúsculas)
+    minRarity = 1,      -- posição mínima em CFG.Rarities
+    rank = {},          -- nome (minúsculo) -> posição
     hitUnknown = true,  -- quebrar raridade fora da lista / não detectada
     cache = {},
     conns = {},
 }
 
-for _, r in ipairs(CFG.Rarities) do
-    Farm.allowed[r:lower()] = true
-    Farm.known[r:lower()] = true
+for i, r in ipairs(CFG.Rarities) do
+    Farm.rank[r:lower()] = i
 end
 
 local function lp_()
@@ -664,11 +683,11 @@ local function rarityOk(block)
     if not name then
         return Farm.hitUnknown
     end
-    local key = name:lower()
-    if not Farm.known[key] then
+    local idx = Farm.rank[name:lower()]
+    if not idx then
         return Farm.hitUnknown
     end
-    return Farm.allowed[key] == true
+    return idx >= Farm.minRarity
 end
 
 local function getPivotPos(inst)
@@ -746,61 +765,86 @@ local function iceLoop()
     end
 end
 
-local function textMatchesWorld(s)
-    s = s:lower()
-    for _, k in ipairs(CFG.WorldKeywords) do
-        if s:find(k, 1, true) then
-            return true
+-- Escolhe o próximo mundo (menor Order acima do atual) que esteja aberto ou
+-- que você já possa comprar (rebirths e cash suficientes).
+local function nextWorld(cfg, getAttr)
+    local prefix = cfg.StateAttributePrefix or "WorldState"
+    local openValue = cfg.Open or "Open"
+    local cur = getAttr(cfg.Attribute or "World")
+    local rebirths = getAttr("Rebirths") or 0
+    local cash = getAttr("Cash") or 0
+    local curOrder = 0
+    for _, w in ipairs(cfg.Worlds) do
+        if w.Key == cur then
+            curOrder = w.Order or 0
         end
     end
-    return false
+    local best, bestOpen
+    for _, w in ipairs(cfg.Worlds) do
+        local order = w.Order or 0
+        if order > curOrder and (not best or order < (best.Order or 0)) then
+            local isOpen = getAttr(prefix .. tostring(w.Key)) == openValue
+            local canBuy = rebirths >= (w.RebirthGate or math.huge) and cash >= (w.Price or math.huge)
+            if isOpen or canBuy then
+                best, bestOpen = w, isOpen
+            end
+        end
+    end
+    return best, bestOpen
 end
 
 local function worldLoop()
+    local RS = game:GetService("ReplicatedStorage")
+    local remotes = RS:FindFirstChild("Remotes")
+    local worldRemotes = remotes and remotes:FindFirstChild("World")
+    local travel = worldRemotes and worldRemotes:FindFirstChild("Travel")
+    local refused = worldRemotes and worldRemotes:FindFirstChild("Refused")
+
+    local okCfg, cfg = pcall(function()
+        return require(RS.Shared.World.WorldConfig)
+    end)
+    if not (travel and okCfg and type(cfg) == "table" and type(cfg.Worlds) == "table") then
+        Say("Auto mundo", "Não achei World.Travel ou WorldConfig")
+        Farm.world = false
+        return
+    end
+
+    local conn
+    if refused then
+        conn = refused.OnClientEvent:Connect(function(...)
+            local parts = {}
+            for _, v in ipairs({ ... }) do
+                parts[#parts + 1] = tostring(v)
+            end
+            Say("Mundo recusado", table.concat(parts, ", "))
+        end)
+    end
+
+    local lastTry, buyTries = {}, {}
     while Farm.world do
-        local char = lp_().Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-
-        -- Prompts no mundo
-        for _, d in ipairs(workspace:GetDescendants()) do
-            if not Farm.world then
-                break
-            end
-            if d:IsA("ProximityPrompt") and d.Enabled then
-                local label = tostring(d.ActionText) .. " " .. tostring(d.ObjectText) .. " " .. (d.Parent and d.Parent.Name or "")
-                if textMatchesWorld(label) and fireproximityprompt then
-                    local par = d.Parent
-                    if root and par and (par:IsA("BasePart") or par:IsA("Model")) then
-                        local cf = getPivotPos(par)
-                        if cf then
-                            root.CFrame = cf + Vector3.new(0, 3, 0)
-                        end
-                    end
-                    pcall(fireproximityprompt, d)
-                    print("[Dark Hub] Prompt de mundo: " .. label)
+        local lp = lp_()
+        local best, isOpen = nextWorld(cfg, function(n)
+            return lp:GetAttribute(n)
+        end)
+        if best then
+            local key = best.Key
+            local now = os.clock()
+            local okTry = (now - (lastTry[key] or -1000)) > 20 and (isOpen or (buyTries[key] or 0) < 3)
+            if okTry then
+                lastTry[key] = now
+                if not isOpen then
+                    buyTries[key] = (buyTries[key] or 0) + 1
                 end
+                Say("Auto mundo", "Indo para " .. tostring(best.DisplayName or key))
+                pcall(function()
+                    travel:FireServer(key)
+                end)
             end
         end
-
-        -- Botões na interface
-        local pg = lp_():FindFirstChildOfClass("PlayerGui")
-        if pg and getconnections then
-            for _, b in ipairs(pg:GetDescendants()) do
-                if b:IsA("TextButton") and b.Visible and textMatchesWorld(b.Text) then
-                    for _, ev in ipairs({ b.MouseButton1Click, b.Activated }) do
-                        local okc, conns = pcall(getconnections, ev)
-                        if okc and conns then
-                            for _, c in ipairs(conns) do
-                                pcall(function() c:Fire() end)
-                            end
-                        end
-                    end
-                    print("[Dark Hub] Botão de mundo: " .. b.Text)
-                end
-            end
-        end
-
         task.wait(CFG.WorldDelay)
+    end
+    if conn then
+        conn:Disconnect()
     end
 end
 
@@ -845,21 +889,17 @@ local HUB = {
                 scripts = {
                     { name = "Auto quebrar gelo", toggle = SetAutoIce },
                     {
-                        name = "Raridades para quebrar",
+                        name = "Raridade mínima",
                         dropdown = {
                             options = RARITY_OPTIONS,
-                            default = RARITY_OPTIONS,
-                            multi = true,
-                            onChange = function(selected)
-                                Farm.allowed = {}
-                                for _, n in ipairs(selected) do
-                                    Farm.allowed[tostring(n):lower()] = true
-                                end
+                            default = "Common",
+                            onChange = function(opt)
+                                Farm.minRarity = Farm.rank[tostring(opt):lower()] or 1
                             end,
                         },
                     },
                     {
-                        name = "Quebrar raridade fora da lista",
+                        name = "Quebrar raridade desconhecida",
                         toggle = function(on) Farm.hitUnknown = on end,
                         default = true,
                     },
@@ -1175,7 +1215,7 @@ end
 local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
 
 ConfigTab:CreateSection("Informações")
-ConfigTab:CreateLabel("🌑 Dark Hub v3.6")
+ConfigTab:CreateLabel("🌑 Dark Hub v3.7")
 ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
 ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
 ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
@@ -1227,4 +1267,4 @@ ConfigTab:CreateParagraph({
 })
 
 Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
-print("[Dark Hub] v3.6 carregado: " .. totalScripts .. " scripts")
+print("[Dark Hub] v3.7 carregado: " .. totalScripts .. " scripts")
