@@ -1,6 +1,6 @@
--- 🌑 DARK HUB v3.8
+-- 🌑 DARK HUB v3.9
 -- Hub de scripts (interface Rayfield) - Mobile e PC
--- Made by Syntax, Dark & Claude
+-- Feito pela Equipe Dark
 --
 -- Para adicionar um script: acrescente uma linha na tabela HUB abaixo.
 -- Campos: name, url (ou run = função local, ou toggle/dropdown), key, warn (aviso curto)
@@ -410,7 +410,22 @@ local function ScanGame()
     add("")
     add("--- MODULOS DE DADOS (ReplicatedStorage.Shared) ---")
     local shared = RS:FindFirstChild("Shared")
+    local wantedMods, seenMods = {}, {}
     for _, nm in ipairs({ "Quality", "Ice", "World", "Companion" }) do
+        wantedMods[#wantedMods + 1] = nm
+        seenMods[nm] = true
+    end
+    if shared then
+        for _, c in ipairs(shared:GetChildren()) do
+            local ln = c.Name:lower()
+            if not seenMods[c.Name] and (ln:find("shop") or ln:find("upgrade") or ln:find("pickaxe")
+                or ln:find("rebirth") or ln:find("axe")) then
+                wantedMods[#wantedMods + 1] = c.Name
+                seenMods[c.Name] = true
+            end
+        end
+    end
+    for _, nm in ipairs(wantedMods) do
         local m = shared and shared:FindFirstChild(nm)
         if m then
             add("# Shared." .. nm .. " (" .. m.ClassName .. ")")
@@ -428,7 +443,7 @@ local function ScanGame()
                 local okReq, data = pcall(require, mod)
                 if okReq then
                     local text = serv(data, 0)
-                    add(mod.Name .. " = " .. text:sub(1, 1800))
+                    add(mod.Name .. " = " .. text:sub(1, 2500))
                 else
                     add(mod.Name .. ": require falhou (" .. tostring(data) .. ")")
                 end
@@ -477,6 +492,13 @@ local function ScanGame()
         end
     else
         add("(Workspace.Obbies não existe)")
+    end
+
+    local upUi = pgui and pgui:FindFirstChild("UpgradeShop")
+    if upUi then
+        add("")
+        add("--- UPGRADESHOP (interface) ---")
+        dumpTree(upUi, 0, 6, { n = 0, max = 140 })
     end
 
     local psUi = pgui and pgui:FindFirstChild("PetShop")
@@ -695,6 +717,16 @@ local CFG = {
         "Primordial", "Abyssal", "Astral", "Paradox", "Infinite", "Omniscient", "Mythos", "Absolute",
     },
     HitDelay = 0.25,
+    ParkHeight = 70,       -- altura do "estacionamento" acima de onde você ligou o auto gelo
+    SpawnClear = 30,       -- distância mínima do spawner para engajar um bloco
+    HoverY = 4,            -- altura sobre o bloco alvo
+    EngageTimeout = 8,     -- tempo máximo batendo no mesmo bloco
+    UpgradeDelay = 0.5,
+    UpgradeBurst = 8,      -- compras seguidas por rodada
+    UpgradeWait = 0.8,     -- espera pela confirmação do servidor
+    UpgradeBackoff = 5,    -- espera após falha (sem dinheiro)
+    UpgradeMaxFactor = 4,  -- cash >= 4x o último custo e não compra => provável máximo
+    UpgradeRetryMax = 120, -- reteste de um upgrade marcado como máximo (s)
     ObbySpeed = 60,        -- velocidade do voo no parkour (studs/s)
     RebirthDelay = 15,
     MergeDelay = 10,
@@ -716,6 +748,12 @@ local Farm = {
     hatchArgs = nil,    -- argumentos aprendidos de Companion.Buy
     eggChoice = "Frost",
     eggQty = 1,
+    pause = false,       -- true durante viagem de mundo/parkour
+    iceRunning = false,
+    isolation = 14,      -- distância mínima de outros blocos ao engajar (0 = ignora)
+    births = {},
+    upgrade = false,
+    upSelected = { AxeCount = true, CritLevel = true, AttackSpeed = true },
     cache = {},
     conns = {},
 }
@@ -775,71 +813,224 @@ local function getPivotPos(inst)
     return nil
 end
 
-local function hitIce(target)
-    local char = lp_().Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not (root and hum) then
-        return
+-- ============================================
+-- AUTO GELO (v3.9)
+-- Ideia: o jogo tem machados automáticos que batem em QUALQUER bloco perto de
+-- você. Por isso o hub fica "estacionado" longe da esteira e só desce quando existe
+-- um bloco da raridade escolhida, longe do spawner e sem outros blocos por perto.
+-- Quando o alvo quebra, volta para o estacionamento.
+-- ============================================
+local function findPickaxe(container)
+    if not container then
+        return nil
     end
-    local cf = getPivotPos(target)
-    if not cf then
-        return
+    for _, t in ipairs(container:GetChildren()) do
+        if t:IsA("Tool") and (t:GetAttribute("PickaxeTool") or t.Name:lower():find("pick", 1, true)) then
+            return t
+        end
     end
-    root.CFrame = cf + Vector3.new(0, 4, 0)
+    return nil
+end
 
-    local tool = char:FindFirstChildOfClass("Tool")
-    if not tool then
-        local bp = lp_():FindFirstChild("Backpack")
-        if bp then
-            for _, t in ipairs(bp:GetChildren()) do
-                if t:IsA("Tool") and t.Name:lower():find("pick", 1, true) then
-                    tool = t
-                    break
+local function ensurePickaxe(char, hum)
+    local tool = findPickaxe(char)
+    if tool then
+        return tool
+    end
+    tool = findPickaxe(lp_():FindFirstChild("Backpack"))
+    if tool then
+        pcall(function() hum:EquipTool(tool) end)
+    end
+    return tool
+end
+
+-- Guarda onde os blocos nascem (média das primeiras posições vistas)
+local function watchBirths()
+    local folder = workspace:FindFirstChild(CFG.IceFolder)
+    if folder == Farm.watched then
+        return
+    end
+    if Farm.birthConn then
+        Farm.birthConn:Disconnect()
+        Farm.birthConn = nil
+    end
+    Farm.watched = folder
+    Farm.spawnPoint = nil
+    Farm.births = {}
+    if folder then
+        Farm.birthConn = folder.ChildAdded:Connect(function(b)
+            task.defer(function()
+                local cf = getPivotPos(b)
+                if cf and cf.Position.Magnitude > 1 then
+                    local list = Farm.births
+                    list[#list + 1] = cf.Position
+                    if #list > 8 then
+                        table.remove(list, 1)
+                    end
+                    local sum = Vector3.new(0, 0, 0)
+                    for _, p in ipairs(list) do
+                        sum = sum + p
+                    end
+                    Farm.spawnPoint = sum / #list
+                end
+            end)
+        end)
+    end
+end
+
+-- Escolhe o melhor alvo: raridade aceita, longe do spawner e isolado dos outros blocos.
+-- Devolve (bloco, bloqueadoPorIsolamento).
+local function pickTarget(startedAt)
+    local list = {}
+    for _, b in ipairs(iceTargets()) do
+        local cf = getPivotPos(b)
+        if cf then
+            list[#list + 1] = { b = b, pos = cf.Position }
+        end
+    end
+    if #list == 0 then
+        return nil, false
+    end
+    -- ainda sem ponto de spawn: espera alguns segundos para aprender onde nascem
+    if not Farm.spawnPoint and os.clock() - startedAt < 12 then
+        return nil, false
+    end
+    local best, bestScore
+    local isoBlocked = false
+    for _, it in ipairs(list) do
+        if rarityOk(it.b) then
+            local fromSpawn = 0
+            local okSpawn = true
+            if Farm.spawnPoint then
+                fromSpawn = (it.pos - Farm.spawnPoint).Magnitude
+                okSpawn = fromSpawn >= CFG.SpawnClear
+            end
+            if okSpawn then
+                local isolated = true
+                if Farm.isolation > 0 then
+                    for _, o in ipairs(list) do
+                        if o ~= it and (o.pos - it.pos).Magnitude < Farm.isolation then
+                            isolated = false
+                            break
+                        end
+                    end
+                end
+                if isolated then
+                    local name = blockRarity(it.b)
+                    local rank = name and Farm.rank[name:lower()] or 0
+                    local score = rank * 1000000 + fromSpawn
+                    if not bestScore or score > bestScore then
+                        best, bestScore = it.b, score
+                    end
+                else
+                    isoBlocked = true
                 end
             end
-            tool = tool or bp:FindFirstChildOfClass("Tool")
-        end
-        if tool then
-            pcall(function() hum:EquipTool(tool) end)
         end
     end
-    if tool then
-        pcall(function() tool:Activate() end)
-    end
+    return best, (best == nil and isoBlocked)
+end
 
-    for _, d in ipairs(target:GetDescendants()) do
-        if d:IsA("ProximityPrompt") and fireproximityprompt then
-            pcall(fireproximityprompt, d)
-        elseif d:IsA("ClickDetector") and fireclickdetector then
-            pcall(fireclickdetector, d)
+local function parkAt(root)
+    if Farm.park then
+        root.CFrame = Farm.park
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        root.Anchored = true
+    end
+end
+
+local function engage(target, root, hum)
+    root.Anchored = false
+    local tool = ensurePickaxe(root.Parent, hum)
+    local t0, lastAct = os.clock(), 0
+    while Farm.ice and not Farm.pause and target.Parent and target:FindFirstChild("Ice", true)
+        and os.clock() - t0 < CFG.EngageTimeout do
+        local cf = getPivotPos(target)
+        if not cf then
+            break
         end
+        root.CFrame = cf + Vector3.new(0, CFG.HoverY, 0)
+        root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        if tool and tool.Parent == root.Parent and os.clock() - lastAct >= CFG.HitDelay then
+            lastAct = os.clock()
+            pcall(function() tool:Activate() end)
+        end
+        task.wait(0.08)
     end
 end
 
 local function iceLoop()
+    Farm.iceRunning = true
+    local startedAt = os.clock()
+    local rootRef, lastWorld
+    local isoSince, lastIsoWarn = nil, -100
+
     while Farm.ice do
-        local char = lp_().Character
+        local lp = lp_()
+        local char = lp.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
-        if root then
-            local best, bestDist
-            for _, inst in ipairs(iceTargets()) do
-                if rarityOk(inst) then
-                    local cf = getPivotPos(inst)
-                    if cf then
-                        local d = (cf.Position - root.Position).Magnitude
-                        if not bestDist or d < bestDist then
-                            best, bestDist = inst, d
-                        end
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+        if Farm.pause then
+            -- troca de mundo / parkour em andamento: não mexe no personagem
+            if root then
+                root.Anchored = false
+            end
+            rootRef = nil
+            task.wait(0.3)
+        elseif root and hum then
+            local worldKey = lp:GetAttribute("World")
+            if root ~= rootRef or worldKey ~= lastWorld then
+                rootRef, lastWorld = root, worldKey
+                root.Anchored = false
+                Farm.home = root.CFrame
+                Farm.park = root.CFrame + Vector3.new(0, CFG.ParkHeight, 0)
+                startedAt = os.clock()
+            end
+            watchBirths()
+
+            local target, isoBlocked = pickTarget(startedAt)
+            if target then
+                isoSince = nil
+                engage(target, root, hum)
+                if Farm.ice and not Farm.pause then
+                    parkAt(root)
+                end
+            else
+                if not root.Anchored then
+                    parkAt(root)
+                end
+                if isoBlocked then
+                    isoSince = isoSince or os.clock()
+                    if os.clock() - isoSince > 30 and os.clock() - lastIsoWarn > 60 then
+                        lastIsoWarn = os.clock()
+                        Say("Auto gelo", "Os alvos sempre têm vizinhos perto. Diminua o Isolamento.")
                     end
+                else
+                    isoSince = nil
                 end
             end
-            if best then
-                hitIce(best)
-            end
+            task.wait(0.12)
+        else
+            task.wait(0.5)
         end
-        task.wait(CFG.HitDelay)
     end
+
+    -- limpeza: solta o personagem e volta para onde você estava
+    local char = lp_().Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.Anchored = false
+        if Farm.home then
+            root.CFrame = Farm.home
+        end
+    end
+    if Farm.birthConn then
+        Farm.birthConn:Disconnect()
+        Farm.birthConn = nil
+    end
+    Farm.watched = nil
+    Farm.iceRunning = false
 end
 
 -- Escolhe o próximo mundo (menor Order acima do atual) que esteja aberto ou
@@ -1058,12 +1249,14 @@ local function worldLoop()
         local lp = lp_()
         if inObby(cfg) then
             -- já está num parkour: termina
+            Farm.pause = true
             if solveObby(cfg) then
                 obbyFails = 0
             else
                 obbyFails = obbyFails + 1
             end
             task.wait(3)
+            Farm.pause = false
         else
             local best, isOpen = nextWorld(cfg, function(n)
                 return lp:GetAttribute(n)
@@ -1077,6 +1270,7 @@ local function worldLoop()
                     if not isOpen then
                         buyTries[key] = (buyTries[key] or 0) + 1
                     end
+                    Farm.pause = true
                     promptSeen = false
                     if goToPortalPad(cfg) then
                         local t0 = os.clock()
@@ -1097,6 +1291,7 @@ local function worldLoop()
                             obbyFails = obbyFails + 1
                         end
                     end
+                    Farm.pause = false
                 end
             end
         end
@@ -1116,7 +1311,7 @@ local function SetAutoIce(on)
         return
     end
     Farm.ice = on
-    if on then
+    if on and not Farm.iceRunning then
         task.spawn(iceLoop)
     end
 end
@@ -1127,7 +1322,13 @@ local function SetAutoWorld(on)
     end
     Farm.world = on
     if on then
-        task.spawn(worldLoop)
+        task.spawn(function()
+            local ok, err = pcall(worldLoop)
+            if not ok then
+                warn("[Dark Hub] auto mundo: " .. tostring(err))
+            end
+            Farm.pause = false
+        end)
     end
 end
 
@@ -1286,6 +1487,155 @@ local SetAutoHatch = makeToggle("hatch", CFG.HatchDelay, function()
     skipHatchUi()
 end)
 
+-- ============================================
+-- AUTO UPGRADE
+-- Compra: Shop.Upgrade("AxeCount" | "CritLevel" | "AttackSpeed")
+-- Sucesso: o servidor responde Shop.Transaction("Upgrade").
+-- NUNCA usa TopUp.Request (completa com Robux).
+-- ============================================
+local UPGRADE_KEYS = { "AxeCount", "CritLevel", "AttackSpeed" }
+local UPGRADE_NEEDLE = { AxeCount = "axe", CritLevel = "crit", AttackSpeed = "attack" }
+local MAX_TEXTS = { max = true, maxed = true, maximum = true, maxlevel = true, maxlvl = true,
+    ["máx"] = true, ["mÁx"] = true, ["máximo"] = true, ["mÁximo"] = true }
+
+local upState = {}
+local txCount = 0
+local txConn
+
+local function ensureTxListener()
+    if txConn then
+        return
+    end
+    local r = getRemote("Shop", "Transaction")
+    if r then
+        txConn = r.OnClientEvent:Connect(function(kind)
+            if kind == "Upgrade" then
+                txCount = txCount + 1
+            end
+        end)
+    end
+end
+
+-- Procura um texto "MAX" na linha do upgrade dentro de UpgradeShop (melhor esforço)
+local function upgradeMaxedUi(key)
+    local pg = lp_():FindFirstChildOfClass("PlayerGui")
+    local ui = pg and pg:FindFirstChild("UpgradeShop")
+    local needle = UPGRADE_NEEDLE[key]
+    if not (ui and needle) then
+        return false
+    end
+    for _, d in ipairs(ui:GetDescendants()) do
+        if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Visible then
+            local t = d.Text:gsub("[%s%p]", ""):lower()
+            if MAX_TEXTS[t] then
+                local anc, depth = d.Parent, 0
+                while anc and anc ~= ui and depth < 6 do
+                    if anc.Name:lower():find(needle, 1, true) then
+                        return true
+                    end
+                    anc = anc.Parent
+                    depth = depth + 1
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function upgradePass()
+    ensureTxListener()
+    local r = getRemote("Shop", "Upgrade")
+    if not r then
+        Farm.upgrade = false
+        Say("Auto upgrade", "Não achei Shop.Upgrade")
+        return
+    end
+    local lp = lp_()
+    for _, key in ipairs(UPGRADE_KEYS) do
+        if not Farm.upgrade then
+            break
+        end
+        if Farm.upSelected[key] then
+            local st = upState[key]
+            if not st then
+                st = { fails = 0, bought = 0, maxed = false, nextTry = 0, failCash = nil, lastCost = nil, lastWarn = -100 }
+                upState[key] = st
+            end
+            if os.clock() >= st.nextTry then
+                local bought = 0
+                for _ = 1, CFG.UpgradeBurst do
+                    if not Farm.upgrade then
+                        break
+                    end
+                    local before = txCount
+                    local cashBefore = lp:GetAttribute("Cash") or 0
+                    r:FireServer(key)
+                    local t0 = os.clock()
+                    while txCount == before and os.clock() - t0 < CFG.UpgradeWait do
+                        task.wait(0.05)
+                    end
+                    if txCount > before then
+                        bought = bought + 1
+                        task.wait(0.1) -- deixa o cash atualizar para medir o custo
+                        local drop = cashBefore - (lp:GetAttribute("Cash") or cashBefore)
+                        if drop > 0 then
+                            st.lastCost = drop
+                        end
+                    else
+                        break
+                    end
+                end
+
+                if bought > 0 then
+                    st.bought = st.bought + bought
+                    st.fails = 0
+                    st.failCash = nil
+                    if st.maxed then
+                        st.maxed = false
+                        Say("Auto upgrade", key .. ": voltou a comprar")
+                    end
+                else
+                    st.fails = st.fails + 1
+                    local cash = lp:GetAttribute("Cash") or 0
+                    st.failCash = st.failCash or cash
+
+                    -- máximo ou falta de dinheiro?
+                    local isMax = false
+                    if upgradeMaxedUi(key) then
+                        isMax = true
+                    elseif st.lastCost and st.fails >= 3 and cash >= st.lastCost * CFG.UpgradeMaxFactor then
+                        isMax = true -- tem bem mais que o último custo e mesmo assim não compra
+                    elseif not st.lastCost and st.fails >= 6 and cash >= st.failCash * 10 then
+                        isMax = true -- sem referência de custo: o cash subiu 10x e não comprou
+                    end
+
+                    if isMax then
+                        if not st.maxed then
+                            st.maxed = true
+                            Say("Auto upgrade", key .. ": provável nível máximo (reteste a cada 2 min)")
+                        end
+                        st.nextTry = os.clock() + CFG.UpgradeRetryMax
+                    else
+                        st.nextTry = os.clock() + CFG.UpgradeBackoff
+                        if os.clock() - st.lastWarn > 60 then
+                            st.lastWarn = os.clock()
+                            Say("Auto upgrade", key .. ": sem dinheiro, aguardando")
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+local setUpgradeLoop = makeToggle("upgrade", CFG.UpgradeDelay, upgradePass)
+local function SetAutoUpgrade(on)
+    if on then
+        upState = {} -- recomeça a detecção de máximo
+    end
+    setUpgradeLoop(on)
+end
+
 local function SellAllNow()
     local r = getRemote("Shop", "SellAll")
     if r then
@@ -1305,6 +1655,8 @@ local function SolveObbyNow()
 end
 
 local RARITY_OPTIONS = CFG.Rarities
+local ISO_OPTIONS = { "Nenhum", "Baixo", "Médio", "Alto" }
+local ISO_VALUES = { ["Nenhum"] = 0, ["Baixo"] = 8, ["Médio"] = 14, ["Alto"] = 22 }
 
 -- ============================================
 -- DADOS
@@ -1332,12 +1684,35 @@ local HUB = {
                         toggle = function(on) Farm.hitUnknown = on end,
                         default = true,
                     },
+                    {
+                        name = "Isolamento do alvo (distância de outros blocos)",
+                        dropdown = {
+                            options = ISO_OPTIONS,
+                            default = "Médio",
+                            onChange = function(opt) Farm.isolation = ISO_VALUES[tostring(opt)] or 14 end,
+                        },
+                    },
                 },
             },
             {
                 title = "Progressão",
                 scripts = {
                     { name = "Auto rebirth", toggle = SetAutoRebirth },
+                    { name = "Auto upgrade (pára sem dinheiro / no máximo)", toggle = SetAutoUpgrade },
+                    {
+                        name = "Upgrades a comprar",
+                        dropdown = {
+                            options = UPGRADE_KEYS,
+                            default = UPGRADE_KEYS,
+                            multi = true,
+                            onChange = function(selected)
+                                Farm.upSelected = {}
+                                for _, n in ipairs(selected) do
+                                    Farm.upSelected[tostring(n)] = true
+                                end
+                            end,
+                        },
+                    },
                     { name = "Auto passar de mundo (compra, entra e faz o parkour)", toggle = SetAutoWorld },
                     { name = "Passar o parkour agora (voar até o Finish)", run = SolveObbyNow },
                 },
@@ -1684,7 +2059,7 @@ end
 local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
 
 ConfigTab:CreateSection("Informações")
-ConfigTab:CreateLabel("🌑 Dark Hub v3.8")
+ConfigTab:CreateLabel("🌑 Dark Hub v3.9")
 ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
 ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
 ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
@@ -1736,4 +2111,4 @@ ConfigTab:CreateParagraph({
 })
 
 Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
-print("[Dark Hub] v3.8 carregado: " .. totalScripts .. " scripts")
+print("[Dark Hub] v3.9 carregado: " .. totalScripts .. " scripts")
