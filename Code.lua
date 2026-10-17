@@ -1,4 +1,4 @@
--- 🌑 DARK HUB v3.7
+-- 🌑 DARK HUB v3.8
 -- Hub de scripts (interface Rayfield) - Mobile e PC
 -- Made by Syntax, Dark & Claude
 --
@@ -410,7 +410,7 @@ local function ScanGame()
     add("")
     add("--- MODULOS DE DADOS (ReplicatedStorage.Shared) ---")
     local shared = RS:FindFirstChild("Shared")
-    for _, nm in ipairs({ "Quality", "Ice", "World" }) do
+    for _, nm in ipairs({ "Quality", "Ice", "World", "Companion" }) do
         local m = shared and shared:FindFirstChild(nm)
         if m then
             add("# Shared." .. nm .. " (" .. m.ClassName .. ")")
@@ -436,6 +436,56 @@ local function ScanGame()
         end
     end
 
+    -- Mundos (tabela completa) e parkours
+    add("")
+    add("--- MUNDOS (WorldConfig.Worlds) ---")
+    local okW, wcfg = pcall(function() return require(RS.Shared.World.WorldConfig) end)
+    if okW and type(wcfg) == "table" and type(wcfg.Worlds) == "table" then
+        for _, w in ipairs(wcfg.Worlds) do
+            add(tostring(w.Order) .. " " .. tostring(w.Key) .. " | " .. tostring(w.DisplayName)
+                .. " | preco=" .. tostring(w.Price) .. " | rebirthGate=" .. tostring(w.RebirthGate)
+                .. " | luck=" .. tostring(w.Luck) .. " | obby=" .. serv(w.Obby, 1))
+        end
+    else
+        add("(WorldConfig não pôde ser lido)")
+    end
+
+    add("")
+    add("--- PARKOURS (Workspace.Obbies) ---")
+    local ob = workspace:FindFirstChild("Obbies")
+    if ob then
+        local names = {}
+        for n, c in ipairs(ob:GetChildren()) do
+            if n > 20 then
+                break
+            end
+            names[#names + 1] = c.Name
+        end
+        add("filhos: " .. table.concat(names, ", "))
+        local shownO = 0
+        for _, d in ipairs(ob:GetDescendants()) do
+            if (d.Name == "Start" or d.Name == "Finish") and shownO < 16 then
+                shownO = shownO + 1
+                local where = d:IsA("BasePart") and tostring(d.Position) or "?"
+                add(d.ClassName .. " " .. path(d) .. " pos=" .. where)
+            end
+        end
+        local first = ob:GetChildren()[1]
+        if first then
+            add("# primeiro parkour em detalhe")
+            dumpTree(first, 0, 2, { n = 0, max = 40 })
+        end
+    else
+        add("(Workspace.Obbies não existe)")
+    end
+
+    local psUi = pgui and pgui:FindFirstChild("PetShop")
+    if psUi then
+        add("")
+        add("--- PETSHOP (interface de pets e ovos) ---")
+        dumpTree(psUi, 0, 6, { n = 0, max = 140 })
+    end
+
     add("")
     add("=== FIM DO SCAN ===")
     return table.concat(out, "\n")
@@ -455,43 +505,107 @@ local function AntiAFK()
     end)
 end
 
--- Grava chamadas de remotes por alguns segundos:
---   C>S = o jogo (ou você) chamando FireServer/InvokeServer
---   S>C = o servidor mandando dados para o cliente (ids dos blocos, raridade etc.)
--- Quebre gelo / venda / viaje de mundo à mão durante a gravação.
+-- ============================================
+-- GRAVADOR DE REMOTES + HOOK COMPARTILHADO
+--   C>S = chamadas FireServer/InvokeServer
+--   S>C = dados que o servidor manda para o cliente
+-- ============================================
+local function serial(v, depth)
+    local t = typeof(v)
+    if t == "string" then
+        return '"' .. v:sub(1, 40) .. '"'
+    elseif t == "number" or t == "boolean" or t == "nil" then
+        return tostring(v)
+    elseif t == "Instance" then
+        local ok, p = pcall(function() return v:GetFullName() end)
+        return "<" .. (ok and p or v.Name) .. ">"
+    elseif t == "table" then
+        if depth >= 2 then
+            return "{...}"
+        end
+        local parts, n = {}, 0
+        for k, val in pairs(v) do
+            n = n + 1
+            if n > 10 then
+                parts[#parts + 1] = "..."
+                break
+            end
+            parts[#parts + 1] = tostring(k) .. "=" .. serial(val, depth + 1)
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return t .. ":" .. tostring(v)
+end
+
+-- Caminho do remote lendo só PROPRIEDADES. Chamar métodos (GetFullName etc.)
+-- dentro do hook troca o método "FireServer" e a chamada nunca chega ao servidor.
+local function remotePath(inst)
+    local parts, cur, guard = {}, inst, 0
+    while cur and cur ~= game and guard < 12 do
+        table.insert(parts, 1, cur.Name)
+        cur = cur.Parent
+        guard = guard + 1
+    end
+    return (table.concat(parts, "."):gsub("^ReplicatedStorage%.Remotes%.", ""))
+end
+
+local function ensureHook()
+    if not (hookmetamethod and getnamecallmethod) then
+        return false, "Executor sem hookmetamethod/getnamecallmethod."
+    end
+    local G = getgenv and getgenv() or _G
+    G.DarkHubH3Listeners = G.DarkHubH3Listeners or {}
+    if G.DarkHubH3 then
+        return true
+    end
+    G.DarkHubH3 = true
+
+    local old
+    local function handler(self, ...)
+        local rec = G.DarkHubH3Rec
+        local ls = G.DarkHubH3Listeners
+        if (rec and rec.active) or (ls and next(ls) ~= nil) then
+            local m = getnamecallmethod()
+            if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
+                local cn = self.ClassName
+                if cn == "RemoteEvent" or cn == "RemoteFunction" then
+                    local args = table.pack(...)
+                    local name = remotePath(self)
+                    task.defer(function()
+                        if rec and rec.active then
+                            pcall(rec.record, "C>S", name, args)
+                        end
+                        if ls then
+                            for _, fn in pairs(ls) do
+                                pcall(fn, name, args)
+                            end
+                        end
+                    end)
+                end
+            end
+            if m and setnamecallmethod then
+                setnamecallmethod(m)
+            end
+        end
+        return old(self, ...)
+    end
+
+    local okHook, res = pcall(function()
+        return hookmetamethod(game, "__namecall", newcclosure and newcclosure(handler) or handler)
+    end)
+    if not okHook then
+        G.DarkHubH3 = nil
+        return false, "Falha ao instalar o hook: " .. tostring(res)
+    end
+    old = res
+    return true
+end
+
 local function RemoteLog(seconds)
     local G = getgenv and getgenv() or _G
     local RS = game:GetService("ReplicatedStorage")
 
-    local function ser(v, depth)
-        local t = typeof(v)
-        if t == "string" then
-            return '"' .. v:sub(1, 40) .. '"'
-        elseif t == "number" or t == "boolean" or t == "nil" then
-            return tostring(v)
-        elseif t == "Instance" then
-            return "<" .. v:GetFullName() .. ">"
-        elseif t == "table" then
-            if depth >= 2 then
-                return "{...}"
-            end
-            local parts, n = {}, 0
-            for k, val in pairs(v) do
-                n = n + 1
-                if n > 10 then
-                    parts[#parts + 1] = "..."
-                    break
-                end
-                parts[#parts + 1] = tostring(k) .. "=" .. ser(val, depth + 1)
-            end
-            return "{" .. table.concat(parts, ", ") .. "}"
-        end
-        return t .. ":" .. tostring(v)
-    end
-
     local state = { active = true, data = {}, order = {} }
-
-    -- guarda no máximo 3 exemplos distintos por remote
     function state.record(dir, name, args)
         local key = dir .. " " .. name
         local rec = state.data[key]
@@ -507,7 +621,7 @@ local function RemoteLog(seconds)
         if #rec.samples < 3 then
             local parts = {}
             for i = 1, args.n do
-                parts[i] = ser(args[i], 0)
+                parts[i] = serial(args[i], 0)
             end
             local text = "(" .. table.concat(parts, ", ") .. ")"
             if not rec.seen[text] then
@@ -516,13 +630,15 @@ local function RemoteLog(seconds)
             end
         end
     end
-
-    G.DarkHubRL2 = state
+    G.DarkHubH3Rec = state
 
     -- Servidor -> cliente: escuta passiva dos grupos que interessam
     local conns = {}
     local remotes = RS:FindFirstChild("Remotes")
-    local watch = { "Conveyor", "Ice", "Pickaxe", "World", "Travel", "Shop", "Rebirth", "Inventory", "Aquarium", "Plot", "Index" }
+    local watch = {
+        "Conveyor", "Ice", "Pickaxe", "World", "Travel", "Shop", "Rebirth",
+        "Inventory", "Aquarium", "Plot", "Index", "Companion", "FishEgg",
+    }
     if remotes then
         for _, folderName in ipairs(watch) do
             local f = remotes:FindFirstChild(folderName)
@@ -541,60 +657,9 @@ local function RemoteLog(seconds)
         end
     end
 
-    -- Cliente -> servidor: precisa de hookmetamethod
-    local hookNote = nil
-    if hookmetamethod and getnamecallmethod then
-        if not G.DarkHubRL2Hooked then
-            G.DarkHubRL2Hooked = true
-            -- Caminho do remote lendo só PROPRIEDADES (Name/Parent). Chamar métodos
-            -- (ex.: GetFullName) dentro do hook troca o método "FireServer" e o
-            -- jogo deixa de enviar a chamada de verdade.
-            local function pathOf(inst)
-                local parts, cur, guard = {}, inst, 0
-                while cur and cur ~= game and guard < 12 do
-                    table.insert(parts, 1, cur.Name)
-                    cur = cur.Parent
-                    guard = guard + 1
-                end
-                return (table.concat(parts, "."):gsub("^ReplicatedStorage%.Remotes%.", ""))
-            end
-            local old
-            local function handler(self, ...)
-                local st = G.DarkHubRL2
-                if st and st.active then
-                    local m = getnamecallmethod()
-                    if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
-                        local cn = self.ClassName
-                        if cn == "RemoteEvent" or cn == "RemoteFunction" then
-                            local args = table.pack(...)
-                            local name = pathOf(self)
-                            -- grava depois, fora do hook
-                            task.defer(function()
-                                pcall(st.record, "C>S", name, args)
-                            end)
-                        end
-                    end
-                    if m and setnamecallmethod then
-                        setnamecallmethod(m)
-                    end
-                end
-                return old(self, ...)
-            end
-            local okHook, res = pcall(function()
-                return hookmetamethod(game, "__namecall", newcclosure and newcclosure(handler) or handler)
-            end)
-            if okHook then
-                old = res
-            else
-                G.DarkHubRL2Hooked = nil
-                hookNote = "Falha ao instalar o hook (C>S indisponível): " .. tostring(res)
-            end
-        end
-    else
-        hookNote = "Executor sem hookmetamethod: só aparecem as chamadas servidor>cliente (S>C)."
-    end
+    local okHook, hookNote = ensureHook()
 
-    Say("Gravando remotes", "Quebre gelo, venda e viaje à mão por " .. seconds .. "s")
+    Say("Gravando remotes", "Faça as ações à mão por " .. seconds .. "s")
     task.wait(seconds)
 
     state.active = false
@@ -603,8 +668,8 @@ local function RemoteLog(seconds)
     end
 
     local lines = { "=== REMOTES GRAVADOS (" .. seconds .. "s) ===" }
-    if hookNote then
-        lines[#lines + 1] = hookNote
+    if not okHook then
+        lines[#lines + 1] = tostring(hookNote) .. " Só aparecem as chamadas servidor>cliente (S>C)."
     end
     for _, key in ipairs(state.order) do
         local rec = state.data[key]
@@ -630,6 +695,11 @@ local CFG = {
         "Primordial", "Abyssal", "Astral", "Paradox", "Infinite", "Omniscient", "Mythos", "Absolute",
     },
     HitDelay = 0.25,
+    ObbySpeed = 60,        -- velocidade do voo no parkour (studs/s)
+    RebirthDelay = 15,
+    MergeDelay = 10,
+    EquipDelay = 15,
+    HatchDelay = 1.5,
     WorldDelay = 8,
 }
 
@@ -639,6 +709,13 @@ local Farm = {
     minRarity = 1,      -- posição mínima em CFG.Rarities
     rank = {},          -- nome (minúsculo) -> posição
     hitUnknown = true,  -- quebrar raridade fora da lista / não detectada
+    rebirth = false,
+    merge = false,
+    equip = false,
+    hatch = false,
+    hatchArgs = nil,    -- argumentos aprendidos de Companion.Buy
+    eggChoice = "Frost",
+    eggQty = 1,
     cache = {},
     conns = {},
 }
@@ -793,25 +870,175 @@ local function nextWorld(cfg, getAttr)
     return best, bestOpen
 end
 
+local function getWorldCfg()
+    local ok, cfg = pcall(function()
+        return require(game:GetService("ReplicatedStorage").Shared.World.WorldConfig)
+    end)
+    if ok and type(cfg) == "table" and type(cfg.Worlds) == "table" then
+        return cfg
+    end
+    return nil
+end
+
+-- Voa em linha reta até o alvo (CFrame a cada frame) atravessando obstáculos.
+local function flyTo(target, speed, timeout)
+    local RunService = game:GetService("RunService")
+    local char = lp_().Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then
+        return false
+    end
+    local touched = {}
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BasePart") and d.CanCollide then
+            touched[#touched + 1] = d
+            d.CanCollide = false
+        end
+    end
+    local deadline = os.clock() + (timeout or 90)
+    local last = os.clock()
+    local arrived = false
+    local conn = RunService.Heartbeat:Connect(function()
+        local now = os.clock()
+        local dt = math.min(now - last, 0.1)
+        last = now
+        local pos = root.Position
+        local delta = target - pos
+        local dist = delta.Magnitude
+        if dist < 2.5 then
+            arrived = true
+            return
+        end
+        local step = math.min(dist, speed * dt)
+        root.CFrame = CFrame.new(pos + delta.Unit * step) * root.CFrame.Rotation
+        root.AssemblyLinearVelocity = Vector3.zero
+    end)
+    while not arrived and os.clock() < deadline and root.Parent do
+        task.wait(0.1)
+    end
+    conn:Disconnect()
+    for _, d in ipairs(touched) do
+        pcall(function() d.CanCollide = true end)
+    end
+    return arrived
+end
+
+local function inObby(cfg)
+    local lp = lp_()
+    if lp:GetAttribute((cfg and cfg.ObbyAttribute) or "Obby") then
+        return true
+    end
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    return root ~= nil and root.Position.Z < -5000
+end
+
+-- Procura o "Finish" mais próximo de você (cada mundo tem o parkour num lugar).
+local function findObbyFinish(cfg, fromPos)
+    local name = (cfg and cfg.ObbyFinishName) or "Finish"
+    local scope = workspace:FindFirstChild("Obbies") or workspace
+    local best, bestD, bestPos
+    for _, d in ipairs(scope:GetDescendants()) do
+        if d.Name == name and (d:IsA("BasePart") or d:IsA("Model")) then
+            local cf = getPivotPos(d)
+            if cf then
+                local pos = cf.Position
+                if d:IsA("BasePart") then
+                    pos = pos + Vector3.new(0, d.Size.Y / 2, 0)
+                end
+                local dist = (pos - fromPos).Magnitude
+                if not bestD or dist < bestD then
+                    best, bestD, bestPos = d, dist, pos
+                end
+            end
+        end
+    end
+    return best, bestPos
+end
+
+local function solveObby(cfg)
+    local char = lp_().Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then
+        return false
+    end
+    local finish, pos = findObbyFinish(cfg, root.Position)
+    if not finish then
+        Say("Parkour", "Não achei o Finish")
+        return false
+    end
+    Say("Parkour", "Voando até o Finish")
+    -- em pé sobre o Finish: centro do corpo ~3 studs acima da superfície
+    local ok = flyTo(pos + Vector3.new(0, 3, 0), CFG.ObbySpeed, 120)
+    if not ok then
+        Say("Parkour", "Não consegui chegar ao Finish")
+    end
+    return ok
+end
+
+-- Teleporta para o pad do portal de mundos (o servidor só aceita a viagem com você lá)
+local function goToPortalPad(cfg)
+    local char = lp_().Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then
+        return false
+    end
+    local padName = (cfg and cfg.PortalPadName) or "Pad"
+    local portals = {}
+    local okTag, tagged = pcall(function()
+        return game:GetService("CollectionService"):GetTagged((cfg and cfg.PortalTag) or "WorldPortal")
+    end)
+    if okTag and tagged then
+        for _, p in ipairs(tagged) do
+            portals[#portals + 1] = p
+        end
+    end
+    if #portals == 0 then
+        local worlds = workspace:FindFirstChild("Worlds")
+        if worlds then
+            for _, d in ipairs(worlds:GetDescendants()) do
+                if d.Name == "WorldPortal" then
+                    portals[#portals + 1] = d
+                end
+            end
+        end
+    end
+    local best, bestD
+    for _, portal in ipairs(portals) do
+        local pad = portal:FindFirstChild(padName, true)
+        if pad and pad:IsA("BasePart") then
+            local dist = (pad.Position - root.Position).Magnitude
+            if not bestD or dist < bestD then
+                best, bestD = pad, dist
+            end
+        end
+    end
+    if not best then
+        return false
+    end
+    root.CFrame = best.CFrame + Vector3.new(0, best.Size.Y / 2 + 3, 0)
+    return true
+end
+
 local function worldLoop()
     local RS = game:GetService("ReplicatedStorage")
     local remotes = RS:FindFirstChild("Remotes")
     local worldRemotes = remotes and remotes:FindFirstChild("World")
     local travel = worldRemotes and worldRemotes:FindFirstChild("Travel")
     local refused = worldRemotes and worldRemotes:FindFirstChild("Refused")
+    local prompt = worldRemotes and worldRemotes:FindFirstChild("Prompt")
+    local cfg = getWorldCfg()
 
-    local okCfg, cfg = pcall(function()
-        return require(RS.Shared.World.WorldConfig)
-    end)
-    if not (travel and okCfg and type(cfg) == "table" and type(cfg.Worlds) == "table") then
+    if not (travel and cfg) then
         Say("Auto mundo", "Não achei World.Travel ou WorldConfig")
         Farm.world = false
         return
     end
 
-    local conn
+    local promptSeen = false
+    local conns = {}
     if refused then
-        conn = refused.OnClientEvent:Connect(function(...)
+        conns[#conns + 1] = refused.OnClientEvent:Connect(function(...)
             local parts = {}
             for _, v in ipairs({ ... }) do
                 parts[#parts + 1] = tostring(v)
@@ -819,32 +1046,68 @@ local function worldLoop()
             Say("Mundo recusado", table.concat(parts, ", "))
         end)
     end
+    if prompt then
+        conns[#conns + 1] = prompt.OnClientEvent:Connect(function()
+            promptSeen = true
+        end)
+    end
 
     local lastTry, buyTries = {}, {}
+    local obbyFails = 0
     while Farm.world do
         local lp = lp_()
-        local best, isOpen = nextWorld(cfg, function(n)
-            return lp:GetAttribute(n)
-        end)
-        if best then
-            local key = best.Key
-            local now = os.clock()
-            local okTry = (now - (lastTry[key] or -1000)) > 20 and (isOpen or (buyTries[key] or 0) < 3)
-            if okTry then
-                lastTry[key] = now
-                if not isOpen then
-                    buyTries[key] = (buyTries[key] or 0) + 1
-                end
-                Say("Auto mundo", "Indo para " .. tostring(best.DisplayName or key))
-                pcall(function()
-                    travel:FireServer(key)
-                end)
+        if inObby(cfg) then
+            -- já está num parkour: termina
+            if solveObby(cfg) then
+                obbyFails = 0
+            else
+                obbyFails = obbyFails + 1
             end
+            task.wait(3)
+        else
+            local best, isOpen = nextWorld(cfg, function(n)
+                return lp:GetAttribute(n)
+            end)
+            if best then
+                local key = best.Key
+                local now = os.clock()
+                local okTry = (now - (lastTry[key] or -1000)) > 20 and (isOpen or (buyTries[key] or 0) < 3)
+                if okTry then
+                    lastTry[key] = now
+                    if not isOpen then
+                        buyTries[key] = (buyTries[key] or 0) + 1
+                    end
+                    promptSeen = false
+                    if goToPortalPad(cfg) then
+                        local t0 = os.clock()
+                        while not promptSeen and os.clock() - t0 < 4 do
+                            task.wait(0.1)
+                        end
+                        task.wait(0.3)
+                    end
+                    Say("Auto mundo", "Indo para " .. tostring(best.DisplayName or key))
+                    pcall(function()
+                        travel:FireServer(key)
+                    end)
+                    task.wait(3)
+                    if inObby(cfg) then
+                        if solveObby(cfg) then
+                            obbyFails = 0
+                        else
+                            obbyFails = obbyFails + 1
+                        end
+                    end
+                end
+            end
+        end
+        if obbyFails >= 3 then
+            Say("Auto mundo", "Parkour falhou 3 vezes; desligando")
+            Farm.world = false
         end
         task.wait(CFG.WorldDelay)
     end
-    if conn then
-        conn:Disconnect()
+    for _, c in ipairs(conns) do
+        pcall(function() c:Disconnect() end)
     end
 end
 
@@ -868,6 +1131,179 @@ local function SetAutoWorld(on)
     end
 end
 
+-- ============================================
+-- REBIRTH, PETS, OVOS E UTILIDADES
+-- ============================================
+local function getRemote(group, name)
+    local remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+    local g = remotes and remotes:FindFirstChild(group)
+    return g and g:FindFirstChild(name)
+end
+
+-- Aciona os callbacks de um botão da interface (quando não há remote conhecido)
+local function clickButton(btn)
+    if not (btn and getconnections) then
+        return false
+    end
+    local fired = false
+    pcall(function()
+        for _, ev in ipairs({ btn.Activated, btn.MouseButton1Click }) do
+            local okc, conns = pcall(getconnections, ev)
+            if okc and conns then
+                for _, c in ipairs(conns) do
+                    if pcall(function() c:Fire() end) then
+                        fired = true
+                    end
+                end
+            end
+        end
+    end)
+    return fired
+end
+
+local function loopWhile(key, delay, fn)
+    task.spawn(function()
+        while Farm[key] do
+            local ok, err = pcall(fn)
+            if not ok then
+                warn("[Dark Hub] " .. key .. ": " .. tostring(err))
+            end
+            task.wait(delay)
+        end
+    end)
+end
+
+local function makeToggle(key, delay, fn)
+    return function(on)
+        if Farm[key] == on then
+            return
+        end
+        Farm[key] = on
+        if on then
+            loopWhile(key, delay, fn)
+        end
+    end
+end
+
+-- Auto rebirth: o servidor só aceita quando você já pode renascer
+local lastRebirths = nil
+local SetAutoRebirth = makeToggle("rebirth", CFG.RebirthDelay, function()
+    local lp = lp_()
+    local before = lp:GetAttribute("Rebirths") or 0
+    if lastRebirths == nil then
+        lastRebirths = before
+    end
+    local r = getRemote("Rebirth", "Request")
+    if r then
+        r:FireServer()
+    end
+    task.wait(2)
+    local after = lp:GetAttribute("Rebirths") or 0
+    if after > lastRebirths then
+        lastRebirths = after
+        Say("Auto rebirth", "Rebirths: " .. tostring(after))
+    end
+end)
+
+-- Gravado: Companion.MergeAll("Pet") e Companion.EquipBest("Pet")
+local SetAutoMerge = makeToggle("merge", CFG.MergeDelay, function()
+    local r = getRemote("Companion", "MergeAll")
+    if r then
+        r:FireServer("Pet")
+    end
+end)
+
+local SetAutoEquipBest = makeToggle("equip", CFG.EquipDelay, function()
+    local r = getRemote("Companion", "EquipBest")
+    if r then
+        r:FireServer("Pet")
+    end
+end)
+
+-- Ovos: você abre 1 ovo à mão e o hub repete exatamente aquela chamada
+local function LearnHatch(seconds)
+    local okHook, note = ensureHook()
+    if not okHook then
+        return tostring(note)
+    end
+    local G = getgenv and getgenv() or _G
+    local got
+    G.DarkHubH3Listeners.learn = function(name, args)
+        if name == "Companion.Buy" then
+            got = args
+        end
+    end
+    Say("Aprender ovo", "Abra 1 ovo (do tipo e quantidade que quer repetir) em " .. seconds .. "s")
+    local t0 = os.clock()
+    while not got and os.clock() - t0 < seconds do
+        task.wait(0.2)
+    end
+    G.DarkHubH3Listeners.learn = nil
+    if not got then
+        return "Nenhum ovo foi aberto nesse tempo. Tente de novo."
+    end
+    Farm.hatchArgs = got
+    local parts = {}
+    for i = 1, got.n do
+        parts[i] = serial(got[i], 0)
+    end
+    return "Ovo aprendido: Companion.Buy(" .. table.concat(parts, ", ") .. ")"
+end
+
+local function skipHatchUi()
+    local pg = lp_():FindFirstChildOfClass("PlayerGui")
+    local ui = pg and pg:FindFirstChild("EggHatchUI")
+    if ui and ui.Enabled then
+        clickButton(ui:FindFirstChild("Skip", true))
+        clickButton(ui:FindFirstChild("Continue", true))
+    end
+end
+
+-- Gravado: Companion.Buy("Wonder", 10, true) e Companion.Buy("Castle", 10, true)
+-- Frost = Ovo de Congelamento (deduzido pelos pets do ovo; confirme com "Aprender ovo")
+local EGG_OPTIONS = { "Frost", "Castle", "Wonder", "Aprendido" }
+local EGG_QTY = { "1", "10" }
+
+local SetAutoHatch = makeToggle("hatch", CFG.HatchDelay, function()
+    local r = getRemote("Companion", "Buy")
+    if not r then
+        Farm.hatch = false
+        Say("Auto ovo", "Não achei Companion.Buy")
+        return
+    end
+    if Farm.eggChoice == "Aprendido" then
+        local args = Farm.hatchArgs
+        if not args then
+            Farm.hatch = false
+            Say("Auto ovo", "Use 'Aprender ovo' primeiro")
+            return
+        end
+        r:FireServer(table.unpack(args, 1, args.n))
+    else
+        r:FireServer(Farm.eggChoice, Farm.eggQty, true)
+    end
+    task.wait(0.6)
+    skipHatchUi()
+end)
+
+local function SellAllNow()
+    local r = getRemote("Shop", "SellAll")
+    if r then
+        r:FireServer()
+    end
+end
+
+local function SolveObbyNow()
+    local cfg = getWorldCfg()
+    if not cfg then
+        return "WorldConfig não encontrado"
+    end
+    if not inObby(cfg) then
+        return "Você não está num parkour agora"
+    end
+    return solveObby(cfg) and "Parkour concluído" or "Não consegui concluir o parkour"
+end
+
 local RARITY_OPTIONS = CFG.Rarities
 
 -- ============================================
@@ -878,14 +1314,7 @@ local HUB = {
         tab = "🐟 Resgate um Peixe",
         sections = {
             {
-                title = "Diagnóstico (rode primeiro)",
-                scripts = {
-                    { name = "Scanner do jogo (copia o resultado)", run = ScanGame },
-                    { name = "Gravar remotes por 45s (quebre gelo/venda/viaje à mão)", run = function() return RemoteLog(45) end },
-                },
-            },
-            {
-                title = "Auto Farm (experimental)",
+                title = "Auto Farm",
                 scripts = {
                     { name = "Auto quebrar gelo", toggle = SetAutoIce },
                     {
@@ -903,12 +1332,52 @@ local HUB = {
                         toggle = function(on) Farm.hitUnknown = on end,
                         default = true,
                     },
-                    { name = "Auto passar de mundo", toggle = SetAutoWorld },
+                },
+            },
+            {
+                title = "Progressão",
+                scripts = {
+                    { name = "Auto rebirth", toggle = SetAutoRebirth },
+                    { name = "Auto passar de mundo (compra, entra e faz o parkour)", toggle = SetAutoWorld },
+                    { name = "Passar o parkour agora (voar até o Finish)", run = SolveObbyNow },
+                },
+            },
+            {
+                title = "Pets e ovos",
+                scripts = {
+                    { name = "Auto mesclar pets", toggle = SetAutoMerge },
+                    { name = "Auto equipar o melhor", toggle = SetAutoEquipBest },
+                    { name = "Aprender ovo (abra 1 ovo em 25s)", run = function() return LearnHatch(25) end },
+                    {
+                        name = "Ovo",
+                        dropdown = {
+                            options = EGG_OPTIONS,
+                            default = "Frost",
+                            onChange = function(opt) Farm.eggChoice = tostring(opt) end,
+                        },
+                    },
+                    {
+                        name = "Quantidade por vez",
+                        dropdown = {
+                            options = EGG_QTY,
+                            default = "1",
+                            onChange = function(opt) Farm.eggQty = tonumber(opt) or 1 end,
+                        },
+                    },
+                    { name = "Auto abrir ovo", toggle = SetAutoHatch },
+                },
+            },
+            {
+                title = "Diagnóstico",
+                scripts = {
+                    { name = "Scanner do jogo (copia o resultado)", run = ScanGame },
+                    { name = "Gravar remotes por 45s (faça as ações à mão)", run = function() return RemoteLog(45) end },
                 },
             },
             {
                 title = "Utilidades",
                 scripts = {
+                    { name = "Vender tudo agora", run = SellAllNow },
                     { name = "Anti-AFK", run = AntiAFK },
                 },
             },
@@ -1215,7 +1684,7 @@ end
 local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
 
 ConfigTab:CreateSection("Informações")
-ConfigTab:CreateLabel("🌑 Dark Hub v3.7")
+ConfigTab:CreateLabel("🌑 Dark Hub v3.8")
 ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
 ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
 ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
@@ -1267,4 +1736,4 @@ ConfigTab:CreateParagraph({
 })
 
 Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
-print("[Dark Hub] v3.7 carregado: " .. totalScripts .. " scripts")
+print("[Dark Hub] v3.8 carregado: " .. totalScripts .. " scripts")
