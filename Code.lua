@@ -1,6 +1,6 @@
--- 🌑 DARK HUB v3.9
+-- 🌑 DARK HUB v4.1
 -- Hub de scripts (interface Rayfield) - Mobile e PC
--- Feito pela Equipe Dark
+-- Made by Syntax, Dark & Claude
 --
 -- Para adicionar um script: acrescente uma linha na tabela HUB abaixo.
 -- Campos: name, url (ou run = função local, ou toggle/dropdown), key, warn (aviso curto)
@@ -814,7 +814,7 @@ local function getPivotPos(inst)
 end
 
 -- ============================================
--- AUTO GELO (v3.9)
+-- AUTO GELO (v4.1)
 -- Ideia: o jogo tem machados automáticos que batem em QUALQUER bloco perto de
 -- você. Por isso o hub fica "estacionado" longe da esteira e só desce quando existe
 -- um bloco da raridade escolhida, longe do spawner e sem outros blocos por perto.
@@ -1125,9 +1125,7 @@ local function inObby(cfg)
 end
 
 -- Procura o "Finish" mais próximo de você (cada mundo tem o parkour num lugar).
-local function findObbyFinish(cfg, fromPos)
-    local name = (cfg and cfg.ObbyFinishName) or "Finish"
-    local scope = workspace:FindFirstChild("Obbies") or workspace
+local function searchFinish(scope, name, fromPos)
     local best, bestD, bestPos
     for _, d in ipairs(scope:GetDescendants()) do
         if d.Name == name and (d:IsA("BasePart") or d:IsA("Model")) then
@@ -1147,24 +1145,69 @@ local function findObbyFinish(cfg, fromPos)
     return best, bestPos
 end
 
+-- Procura o "Finish" mais próximo de você: primeiro em Workspace.Obbies, depois no workspace todo
+local function findObbyFinish(cfg, fromPos)
+    local name = (cfg and cfg.ObbyFinishName) or "Finish"
+    local obbies = workspace:FindFirstChild("Obbies")
+    local best, pos
+    if obbies then
+        best, pos = searchFinish(obbies, name, fromPos)
+    end
+    if not best then
+        best, pos = searchFinish(workspace, name, fromPos)
+    end
+    return best, pos, obbies
+end
+
+-- Rota: pontos "Stage1..N" / "Checkpoint1..N" do mesmo parkour (se existirem) e por fim o Finish
+local function obbyRoute(finish, finishPos, obbies)
+    local top = finish
+    local stop = obbies or workspace
+    while top.Parent and top.Parent ~= stop and top.Parent ~= workspace do
+        top = top.Parent
+    end
+    local pts = {}
+    for _, d in ipairs(top:GetDescendants()) do
+        if d:IsA("BasePart") then
+            local n = d.Name
+            local num = n:match("^[Ss]tage_?(%d+)$") or n:match("^[Cc]heckpoint_?(%d+)$") or n:match("^[Cc]heck_?(%d+)$")
+            if num then
+                pts[#pts + 1] = { n = tonumber(num), pos = d.Position + Vector3.new(0, d.Size.Y / 2 + 3, 0) }
+            end
+        end
+    end
+    table.sort(pts, function(a, b)
+        return a.n < b.n
+    end)
+    local route = {}
+    for _, p in ipairs(pts) do
+        route[#route + 1] = p.pos
+    end
+    -- em pé sobre o Finish: centro do corpo ~3 studs acima da superfície
+    route[#route + 1] = finishPos + Vector3.new(0, 3, 0)
+    return route
+end
+
 local function solveObby(cfg)
     local char = lp_().Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then
         return false
     end
-    local finish, pos = findObbyFinish(cfg, root.Position)
+    local finish, pos, obbies = findObbyFinish(cfg, root.Position)
     if not finish then
         Say("Parkour", "Não achei o Finish")
         return false
     end
-    Say("Parkour", "Voando até o Finish")
-    -- em pé sobre o Finish: centro do corpo ~3 studs acima da superfície
-    local ok = flyTo(pos + Vector3.new(0, 3, 0), CFG.ObbySpeed, 120)
-    if not ok then
-        Say("Parkour", "Não consegui chegar ao Finish")
+    local route = obbyRoute(finish, pos, obbies)
+    Say("Parkour", #route > 1 and ("Voando por " .. #route .. " pontos") or "Voando até o Finish")
+    for i, target in ipairs(route) do
+        if not flyTo(target, CFG.ObbySpeed, 60) then
+            Say("Parkour", "Não consegui chegar ao ponto " .. i)
+            return false
+        end
     end
-    return ok
+    return true
 end
 
 -- Teleporta para o pad do portal de mundos (o servidor só aceita a viagem com você lá)
@@ -1388,11 +1431,57 @@ end
 
 -- Auto rebirth: o servidor só aceita quando você já pode renascer
 local lastRebirths = nil
+local rebirthMaxSaid = false
+
+local function getRebirthCfg()
+    local ok, cfg = pcall(function()
+        return require(game:GetService("ReplicatedStorage").Shared.Rebirth.RebirthConfig)
+    end)
+    if ok and type(cfg) == "table" and type(cfg.Config) == "table" then
+        return cfg.Config
+    end
+    return nil
+end
+
+-- Menor custo possível do próximo rebirth (olha os índices vizinhos para não errar a conta)
+local function rebirthCostFloor(rc, rebirths)
+    local best
+    local function consider(c)
+        if type(c) == "number" then
+            best = best and math.min(best, c) or c
+        end
+    end
+    if type(rc.Costs) == "table" then
+        consider(rc.Costs[rebirths - 1])
+        consider(rc.Costs[rebirths])
+        consider(rc.Costs[rebirths + 1])
+    end
+    if rebirths == 0 then
+        consider(rc.FirstCost)
+    end
+    return best
+end
+
+-- Auto rebirth: só pede quando o cash alcança o custo e pára no máximo (RebirthConfig)
 local SetAutoRebirth = makeToggle("rebirth", CFG.RebirthDelay, function()
     local lp = lp_()
     local before = lp:GetAttribute("Rebirths") or 0
     if lastRebirths == nil then
         lastRebirths = before
+    end
+    local rc = getRebirthCfg()
+    if rc then
+        if rc.MaxRebirths and before >= rc.MaxRebirths then
+            if not rebirthMaxSaid then
+                rebirthMaxSaid = true
+                Say("Auto rebirth", "Rebirth máximo (" .. tostring(before) .. ")")
+            end
+            return
+        end
+        local floor = rebirthCostFloor(rc, before)
+        if floor and (lp:GetAttribute("Cash") or 0) < floor then
+            return -- ainda sem cash para o próximo rebirth
+        end
     end
     local r = getRemote("Rebirth", "Request")
     if r then
@@ -1421,36 +1510,6 @@ local SetAutoEquipBest = makeToggle("equip", CFG.EquipDelay, function()
     end
 end)
 
--- Ovos: você abre 1 ovo à mão e o hub repete exatamente aquela chamada
-local function LearnHatch(seconds)
-    local okHook, note = ensureHook()
-    if not okHook then
-        return tostring(note)
-    end
-    local G = getgenv and getgenv() or _G
-    local got
-    G.DarkHubH3Listeners.learn = function(name, args)
-        if name == "Companion.Buy" then
-            got = args
-        end
-    end
-    Say("Aprender ovo", "Abra 1 ovo (do tipo e quantidade que quer repetir) em " .. seconds .. "s")
-    local t0 = os.clock()
-    while not got and os.clock() - t0 < seconds do
-        task.wait(0.2)
-    end
-    G.DarkHubH3Listeners.learn = nil
-    if not got then
-        return "Nenhum ovo foi aberto nesse tempo. Tente de novo."
-    end
-    Farm.hatchArgs = got
-    local parts = {}
-    for i = 1, got.n do
-        parts[i] = serial(got[i], 0)
-    end
-    return "Ovo aprendido: Companion.Buy(" .. table.concat(parts, ", ") .. ")"
-end
-
 local function skipHatchUi()
     local pg = lp_():FindFirstChildOfClass("PlayerGui")
     local ui = pg and pg:FindFirstChild("EggHatchUI")
@@ -1460,11 +1519,35 @@ local function skipHatchUi()
     end
 end
 
--- Gravado: Companion.Buy("Wonder", 10, true) e Companion.Buy("Castle", 10, true)
--- Frost = Ovo de Congelamento (deduzido pelos pets do ovo; confirme com "Aprender ovo")
-local EGG_OPTIONS = { "Frost", "Castle", "Wonder", "Aprendido" }
+-- Ovos (CompanionEggConfig): preço em gelo e rebirths exigidos. Remote: Companion.Buy(chave, qtd, true)
+local EGG_INFO = {
+    Frost = { price = 1, rebirth = 0 },
+    Castle = { price = 50, rebirth = 2 },
+    Citrus = { price = 300, rebirth = 4 },
+    Wonder = { price = 1200, rebirth = 6 },
+    Inferno = { price = 4000, rebirth = 9 },
+    Eternal = { price = 12000, rebirth = 13 },
+    Nebula = { price = 36000, rebirth = 15 },
+    Prism = { price = 100000, rebirth = 17 },
+}
+local EGG_OPTIONS = { "Frost", "Castle", "Citrus", "Wonder", "Inferno", "Eternal", "Nebula", "Prism" }
 local EGG_QTY = { "1", "10" }
 
+local function eggInfo(key)
+    local ok, cfg = pcall(function()
+        return require(game:GetService("ReplicatedStorage").Shared.Companion.CompanionEggConfig)
+    end)
+    if ok and type(cfg) == "table" and type(cfg.Eggs) == "table" then
+        for _, e in ipairs(cfg.Eggs) do
+            if e.Key == key then
+                return { price = e.Price, rebirth = e.RebirthRequired or 0 }
+            end
+        end
+    end
+    return EGG_INFO[key]
+end
+
+local eggWarnAt = -100
 local SetAutoHatch = makeToggle("hatch", CFG.HatchDelay, function()
     local r = getRemote("Companion", "Buy")
     if not r then
@@ -1472,29 +1555,44 @@ local SetAutoHatch = makeToggle("hatch", CFG.HatchDelay, function()
         Say("Auto ovo", "Não achei Companion.Buy")
         return
     end
-    if Farm.eggChoice == "Aprendido" then
-        local args = Farm.hatchArgs
-        if not args then
+    local lp = lp_()
+    local key = Farm.eggChoice
+    local qty = Farm.eggQty or 1
+    local info = eggInfo(key)
+    if info then
+        if (lp:GetAttribute("Rebirths") or 0) < (info.rebirth or 0) then
             Farm.hatch = false
-            Say("Auto ovo", "Use 'Aprender ovo' primeiro")
+            Say("Auto ovo", key .. " exige " .. tostring(info.rebirth) .. " rebirths")
             return
         end
-        r:FireServer(table.unpack(args, 1, args.n))
-    else
-        r:FireServer(Farm.eggChoice, Farm.eggQty, true)
+        local price = info.price or 0
+        local ice = lp:GetAttribute("Ice") or 0
+        if price > 0 and ice < price * qty then
+            qty = (ice >= price) and 1 or 0 -- sem gelo para o lote: tenta 1 ovo
+        end
+        if qty == 0 then
+            if os.clock() - eggWarnAt > 60 then
+                eggWarnAt = os.clock()
+                Say("Auto ovo", "Sem gelo para o ovo " .. key .. " (custa " .. tostring(price) .. ")")
+            end
+            return
+        end
     end
+    r:FireServer(key, qty, true)
     task.wait(0.6)
     skipHatchUi()
 end)
 
 -- ============================================
 -- AUTO UPGRADE
--- Compra: Shop.Upgrade("AxeCount" | "CritLevel" | "AttackSpeed")
+-- Compra: Shop.Upgrade(chave). Máximo e custo vêm de Shared.Shop.UpgradeConfig.
 -- Sucesso: o servidor responde Shop.Transaction("Upgrade").
 -- NUNCA usa TopUp.Request (completa com Robux).
 -- ============================================
-local UPGRADE_KEYS = { "AxeCount", "CritLevel", "AttackSpeed" }
-local UPGRADE_NEEDLE = { AxeCount = "axe", CritLevel = "crit", AttackSpeed = "attack" }
+local UPGRADE_KEYS = { "AxeCount", "CritLevel", "AttackSpeed", "IceAmount", "CompanionSlots", "AquariumSlots" }
+local UPGRADE_DEFAULT = { "AxeCount", "CritLevel", "AttackSpeed" } -- os 3 já gravados; os outros não foram testados
+local UPGRADE_NEEDLE = { AxeCount = "axe", CritLevel = "crit", AttackSpeed = "attack",
+    IceAmount = "ice", CompanionSlots = "slot", AquariumSlots = "plot" }
 local MAX_TEXTS = { max = true, maxed = true, maximum = true, maxlevel = true, maxlvl = true,
     ["máx"] = true, ["mÁx"] = true, ["máximo"] = true, ["mÁximo"] = true }
 
@@ -1542,6 +1640,39 @@ local function upgradeMaxedUi(key)
     return false
 end
 
+-- Tabela do jogo (Shared.Shop.UpgradeConfig): máximo, custo base e crescimento de cada upgrade
+local upDefs
+local function getUpgradeDefs()
+    if upDefs then
+        return upDefs
+    end
+    local ok, cfg = pcall(function()
+        return require(game:GetService("ReplicatedStorage").Shared.Shop.UpgradeConfig)
+    end)
+    if ok and type(cfg) == "table" and type(cfg.Upgrades) == "table" then
+        local d = {}
+        for _, u in ipairs(cfg.Upgrades) do
+            if u.Key then
+                d[u.Key] = u
+            end
+        end
+        upDefs = d
+        return d
+    end
+    return {}
+end
+
+-- Nível atual lido do atributo do jogador (só quando o passo é 1 e o atributo é o nível + base)
+local function upgradeLevel(def, lp)
+    if def and def.Step == 1 and type(def.Base) == "number" and type(def.MaxLevel) == "number" then
+        local attr = lp:GetAttribute(def.Attribute)
+        if type(attr) == "number" then
+            return attr - def.Base, def.MaxLevel
+        end
+    end
+    return nil, nil
+end
+
 local function upgradePass()
     ensureTxListener()
     local r = getRemote("Shop", "Upgrade")
@@ -1551,6 +1682,7 @@ local function upgradePass()
         return
     end
     local lp = lp_()
+    local defs = getUpgradeDefs()
     for _, key in ipairs(UPGRADE_KEYS) do
         if not Farm.upgrade then
             break
@@ -1561,65 +1693,93 @@ local function upgradePass()
                 st = { fails = 0, bought = 0, maxed = false, nextTry = 0, failCash = nil, lastCost = nil, lastWarn = -100 }
                 upState[key] = st
             end
-            if os.clock() >= st.nextTry then
-                local bought = 0
-                for _ = 1, CFG.UpgradeBurst do
-                    if not Farm.upgrade then
-                        break
-                    end
-                    local before = txCount
-                    local cashBefore = lp:GetAttribute("Cash") or 0
-                    r:FireServer(key)
-                    local t0 = os.clock()
-                    while txCount == before and os.clock() - t0 < CFG.UpgradeWait do
-                        task.wait(0.05)
-                    end
-                    if txCount > before then
-                        bought = bought + 1
-                        task.wait(0.1) -- deixa o cash atualizar para medir o custo
-                        local drop = cashBefore - (lp:GetAttribute("Cash") or cashBefore)
-                        if drop > 0 then
-                            st.lastCost = drop
-                        end
-                    else
-                        break
-                    end
+            local def = defs[key]
+            local lvl, maxL = upgradeLevel(def, lp)
+
+            if lvl ~= nil and lvl >= maxL then
+                -- máximo exato (nível lido do jogo)
+                if not st.maxed then
+                    st.maxed = true
+                    Say("Auto upgrade", key .. ": nível máximo (" .. tostring(lvl) .. "/" .. tostring(maxL) .. ")")
                 end
-
-                if bought > 0 then
-                    st.bought = st.bought + bought
+            else
+                if st.maxed and lvl ~= nil then
+                    -- os níveis voltaram (ex.: depois de um rebirth): recomeça
+                    st.maxed = false
                     st.fails = 0
-                    st.failCash = nil
-                    if st.maxed then
-                        st.maxed = false
-                        Say("Auto upgrade", key .. ": voltou a comprar")
-                    end
-                else
-                    st.fails = st.fails + 1
-                    local cash = lp:GetAttribute("Cash") or 0
-                    st.failCash = st.failCash or cash
-
-                    -- máximo ou falta de dinheiro?
-                    local isMax = false
-                    if upgradeMaxedUi(key) then
-                        isMax = true
-                    elseif st.lastCost and st.fails >= 3 and cash >= st.lastCost * CFG.UpgradeMaxFactor then
-                        isMax = true -- tem bem mais que o último custo e mesmo assim não compra
-                    elseif not st.lastCost and st.fails >= 6 and cash >= st.failCash * 10 then
-                        isMax = true -- sem referência de custo: o cash subiu 10x e não comprou
-                    end
-
-                    if isMax then
-                        if not st.maxed then
-                            st.maxed = true
-                            Say("Auto upgrade", key .. ": provável nível máximo (reteste a cada 2 min)")
+                    st.nextTry = 0
+                end
+                if os.clock() >= st.nextTry then
+                    local bought = 0
+                    for _ = 1, CFG.UpgradeBurst do
+                        if not Farm.upgrade then
+                            break
                         end
-                        st.nextTry = os.clock() + CFG.UpgradeRetryMax
+                        local before = txCount
+                        local cashBefore = lp:GetAttribute("Cash") or 0
+                        r:FireServer(key)
+                        local t0 = os.clock()
+                        while txCount == before and os.clock() - t0 < CFG.UpgradeWait do
+                            task.wait(0.05)
+                        end
+                        if txCount > before then
+                            bought = bought + 1
+                            task.wait(0.1) -- deixa o cash e o nível atualizarem
+                            local drop = cashBefore - (lp:GetAttribute("Cash") or cashBefore)
+                            if drop > 0 then
+                                st.lastCost = drop
+                            end
+                            local nowLvl = upgradeLevel(def, lp)
+                            if nowLvl ~= nil and nowLvl >= maxL then
+                                break -- chegou no máximo; avisa na próxima rodada
+                            end
+                        else
+                            break
+                        end
+                    end
+
+                    if bought > 0 then
+                        st.bought = st.bought + bought
+                        st.fails = 0
+                        st.failCash = nil
+                        if st.maxed then
+                            st.maxed = false
+                            Say("Auto upgrade", key .. ": voltou a comprar")
+                        end
                     else
-                        st.nextTry = os.clock() + CFG.UpgradeBackoff
-                        if os.clock() - st.lastWarn > 60 then
-                            st.lastWarn = os.clock()
-                            Say("Auto upgrade", key .. ": sem dinheiro, aguardando")
+                        st.fails = st.fails + 1
+                        local cash = lp:GetAttribute("Cash") or 0
+                        st.failCash = st.failCash or cash
+
+                        -- com o nível conhecido, falha = falta de dinheiro; sem ele, estima
+                        local isMax = false
+                        if lvl == nil then
+                            if upgradeMaxedUi(key) then
+                                isMax = true
+                            elseif st.lastCost and st.fails >= 3 and cash >= st.lastCost * CFG.UpgradeMaxFactor then
+                                isMax = true
+                            elseif not st.lastCost and st.fails >= 6 and cash >= st.failCash * 10 then
+                                isMax = true
+                            end
+                        end
+
+                        if isMax then
+                            if not st.maxed then
+                                st.maxed = true
+                                Say("Auto upgrade", key .. ": provável nível máximo (reteste a cada 2 min)")
+                            end
+                            st.nextTry = os.clock() + CFG.UpgradeRetryMax
+                        else
+                            st.nextTry = os.clock() + CFG.UpgradeBackoff
+                            if os.clock() - st.lastWarn > 60 then
+                                st.lastWarn = os.clock()
+                                local est
+                                if def and lvl and def.FirstCost and def.CostGrowth then
+                                    est = def.FirstCost * def.CostGrowth ^ lvl
+                                end
+                                Say("Auto upgrade", key .. ": sem dinheiro"
+                                    .. (est and string.format(" (custo ~%.3g)", est) or "") .. ", aguardando")
+                            end
                         end
                     end
                 end
@@ -1700,10 +1860,10 @@ local HUB = {
                     { name = "Auto rebirth", toggle = SetAutoRebirth },
                     { name = "Auto upgrade (pára sem dinheiro / no máximo)", toggle = SetAutoUpgrade },
                     {
-                        name = "Upgrades a comprar",
+                        name = "Upgrades a comprar (IceAmount, CompanionSlots e AquariumSlots: não testados)",
                         dropdown = {
                             options = UPGRADE_KEYS,
-                            default = UPGRADE_KEYS,
+                            default = UPGRADE_DEFAULT,
                             multi = true,
                             onChange = function(selected)
                                 Farm.upSelected = {}
@@ -1722,7 +1882,6 @@ local HUB = {
                 scripts = {
                     { name = "Auto mesclar pets", toggle = SetAutoMerge },
                     { name = "Auto equipar o melhor", toggle = SetAutoEquipBest },
-                    { name = "Aprender ovo (abra 1 ovo em 25s)", run = function() return LearnHatch(25) end },
                     {
                         name = "Ovo",
                         dropdown = {
@@ -1790,78 +1949,6 @@ local HUB = {
                     { name = "Dex Explorer", url = "https://raw.githubusercontent.com/infyiff/backup/main/dex.lua" },
                     { name = "Dark Dex V3", url = "https://raw.githubusercontent.com/Babyhamsta/RBLX_Scripts/main/Universal/BypassedDarkDexV3.lua" },
                     { name = "FPS Unlocker", url = "https://pastebin.com/raw/q4ezfNQF", warn = "link não verificado" },
-                },
-            },
-        },
-    },
-    {
-        tab = "🍎 Blox Fruits",
-        sections = {
-            {
-                title = "Hubs",
-                scripts = {
-                    { name = "Hoho Hub", url = "https://raw.githubusercontent.com/acsu123/HOHO_H/main/Loading_UI", key = true },
-                    { name = "Redz Hub", url = "https://raw.githubusercontent.com/tlredz/Scripts/refs/heads/main/main.luau" },
-                    { name = "Speed Hub X", url = "https://raw.githubusercontent.com/AhmadV99/Speed-Hub-X/main/Speed%20Hub%20X.lua" },
-                    { name = "Zen Hub", url = "https://raw.githubusercontent.com/Kaizenofficiall/ZenHub/main/Loader" },
-                    { name = "Mukuro Hub", url = "https://raw.githubusercontent.com/xQuartyx/DonateMe/main/ScriptLoader", warn = "carrega código de outro servidor" },
-                },
-            },
-        },
-    },
-    {
-        tab = "🔫 Arsenal",
-        sections = {
-            {
-                title = "Hubs",
-                scripts = {
-                    { name = "Owl Hub", url = "https://raw.githubusercontent.com/CriShoux/OwlHub/master/OwlHub.txt" },
-                },
-            },
-        },
-    },
-    {
-        tab = "🏙️ Da Hood",
-        sections = {
-            {
-                title = "Hubs",
-                scripts = {
-                    { name = "MTriet Hub", url = "https://raw.githubusercontent.com/Minhtriettt/Free-Script/main/MTriet-Hub.lua" },
-                    { name = "SwagMode", url = "https://raw.githubusercontent.com/lerkermer/lua-projects/master/SwagModeV002", key = true, warn = "código ofuscado" },
-                },
-            },
-        },
-    },
-    {
-        tab = "🚓 Jailbreak",
-        sections = {
-            {
-                title = "Hubs",
-                scripts = {
-                    { name = "V.G Hub", url = "https://raw.githubusercontent.com/1201for/V.G-Hub/main/V.Ghub" },
-                    { name = "Nexus", url = "https://raw.githubusercontent.com/s-o-a-b/nexus/main/loadstring", warn = "carrega código de outro repositório" },
-                },
-            },
-        },
-    },
-    {
-        tab = "⚽ Blade Ball",
-        sections = {
-            {
-                title = "Auto Parry",
-                scripts = {
-                    { name = "Auto Parry + Visualizer", url = "https://raw.githubusercontent.com/Akash1al/Blade-Ball-Updated-Script/refs/heads/main/Blade-Ball-Script", warn = "não revisado por completo" },
-                },
-            },
-        },
-    },
-    {
-        tab = "🎮 Outros Jogos",
-        sections = {
-            {
-                title = "Murder Mystery 2",
-                scripts = {
-                    { name = "Eclipse Hub", url = "https://raw.githubusercontent.com/Ethanoj1/EclipseMM2/master/Script", warn = "copia texto para o clipboard" },
                 },
             },
         },
@@ -2059,7 +2146,7 @@ end
 local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
 
 ConfigTab:CreateSection("Informações")
-ConfigTab:CreateLabel("🌑 Dark Hub v3.9")
+ConfigTab:CreateLabel("🌑 Dark Hub v4.1")
 ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
 ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
 ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
@@ -2111,4 +2198,4 @@ ConfigTab:CreateParagraph({
 })
 
 Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
-print("[Dark Hub] v3.9 carregado: " .. totalScripts .. " scripts")
+print("[Dark Hub] v4.1 carregado: " .. totalScripts .. " scripts")
