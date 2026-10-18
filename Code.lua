@@ -1,4 +1,4 @@
--- 🌑 DARK HUB v4.2
+-- 🌑 DARK HUB v4.3
 -- Hub de scripts (interface Rayfield) - Mobile e PC
 -- Made by Syntax, Dark & Claude
 --
@@ -506,6 +506,14 @@ local function ScanGame()
         add("")
         add("--- PETSHOP (interface de pets e ovos) ---")
         dumpTree(psUi, 0, 6, { n = 0, max = 140 })
+        for _, nm in ipairs({ "EggFrost", "EggCastle" }) do
+            local f = psUi:FindFirstChild(nm, true)
+            if f then
+                add("")
+                add("--- CARTAO DO OVO " .. nm .. " (preços e botões) ---")
+                dumpTree(f, 0, 7, { n = 0, max = 70 })
+            end
+        end
     end
 
     add("")
@@ -721,9 +729,6 @@ local CFG = {
     SpawnClear = 30,       -- distância mínima do spawner para engajar um bloco
     HoverY = 4,            -- altura sobre o bloco alvo
     EngageTimeout = 8,     -- tempo máximo batendo no mesmo bloco
-    AuraReach = 28,        -- kill aura: alcance máximo até o bloco mais próximo
-    AuraMargin = 6,        -- kill aura: o 2º bloco mais próximo precisa estar >= 6 studs mais longe
-    AuraDelay = 0.12,
     UpgradeDelay = 0.5,
     UpgradeBurst = 8,      -- compras seguidas por rodada
     UpgradeWait = 0.8,     -- espera pela confirmação do servidor
@@ -753,8 +758,6 @@ local Farm = {
     eggQty = 1,
     pause = false,       -- true durante viagem de mundo/parkour
     iceRunning = false,
-    aura = false,
-    auraRunning = false,
     isolation = 14,      -- distância mínima de outros blocos ao engajar (0 = ignora)
     births = {},
     upgrade = false,
@@ -819,7 +822,7 @@ local function getPivotPos(inst)
 end
 
 -- ============================================
--- AUTO GELO (v4.2)
+-- AUTO GELO (v4.3)
 -- Ideia: o jogo tem machados automáticos que batem em QUALQUER bloco perto de
 -- você. Por isso o hub fica "estacionado" longe da esteira e só desce quando existe
 -- um bloco da raridade escolhida, longe do spawner e sem outros blocos por perto.
@@ -1376,10 +1379,6 @@ local function SetAutoIce(on)
     if on == Farm.ice then
         return
     end
-    if on and Farm.aura then
-        Say("Auto gelo", "Desligue o Kill aura primeiro")
-        return
-    end
     Farm.ice = on
     if on and not Farm.iceRunning then
         task.spawn(iceLoop)
@@ -1457,111 +1456,6 @@ local function makeToggle(key, delay, fn)
 end
 
 -- Auto rebirth: o servidor só aceita quando você já pode renascer
--- ============================================
--- KILL AURA PARADO (EXPERIMENTAL)
--- Não mexe no personagem: fique a 10+ studs da esteira (fora do alcance dos
--- machados). Bate (Tool:Activate) só quando o bloco MAIS PRÓXIMO é da raridade
--- escolhida e está bem mais perto que o seguinte. O hub confere cada golpe pelo
--- Conveyor.Hit; se o servidor bater em bloco fora do filtro 2 vezes, desliga sozinho.
--- ============================================
-local function auraLoop()
-    Farm.auraRunning = true
-    local wantedHits, badHits = 0, 0
-    local badTimes = {}
-    local conn
-
-    local hitEv = getRemote("Conveyor", "Hit")
-    if hitEv then
-        conn = hitEv.OnClientEvent:Connect(function(batch)
-            if type(batch) ~= "table" then
-                return
-            end
-            local folder = workspace:FindFirstChild(CFG.IceFolder)
-            for _, h in ipairs(batch) do
-                local id = type(h) == "table" and h[1] or nil
-                local blk = id and folder and folder:FindFirstChild("Block_" .. tostring(id)) or nil
-                if blk then
-                    if rarityOk(blk) then
-                        wantedHits = wantedHits + 1
-                    else
-                        badHits = badHits + 1
-                        badTimes[#badTimes + 1] = os.clock()
-                    end
-                end
-            end
-        end)
-    end
-
-    while Farm.aura do
-        if Farm.ice then
-            Say("Kill aura", "Desligue o Auto quebrar gelo primeiro")
-            Farm.aura = false
-            break
-        end
-        local lp = lp_()
-        local char = lp.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if root and hum and not Farm.pause then
-            -- bloco mais próximo (n1/d1) e a distância do segundo mais próximo (d2)
-            local n1, d1, d2
-            for _, b in ipairs(iceTargets()) do
-                local cf = getPivotPos(b)
-                if cf then
-                    local d = (cf.Position - root.Position).Magnitude
-                    if not d1 or d < d1 then
-                        d2 = d1
-                        n1, d1 = b, d
-                    elseif not d2 or d < d2 then
-                        d2 = d
-                    end
-                end
-            end
-            if n1 and d1 <= CFG.AuraReach and rarityOk(n1) and (not d2 or d2 - d1 >= CFG.AuraMargin) then
-                local tool = ensurePickaxe(char, hum)
-                if tool and tool.Parent == char then
-                    pcall(function() tool:Activate() end)
-                end
-            end
-        end
-
-        -- golpes fora do filtro nos últimos 20s?
-        local recent = {}
-        for _, t in ipairs(badTimes) do
-            if os.clock() - t < 20 then
-                recent[#recent + 1] = t
-            end
-        end
-        badTimes = recent
-        if #badTimes >= 2 then
-            Say("Kill aura", "Bateu em bloco fora do filtro 2x. Afaste-se mais da esteira ou use o Auto quebrar gelo.")
-            Farm.aura = false
-            break
-        end
-        task.wait(CFG.AuraDelay)
-    end
-
-    if conn then
-        conn:Disconnect()
-    end
-    Say("Kill aura", "Fim: " .. wantedHits .. " golpes no filtro, " .. badHits .. " fora")
-    Farm.auraRunning = false
-end
-
-local function SetAutoAura(on)
-    if on == Farm.aura then
-        return
-    end
-    if on and Farm.ice then
-        Say("Kill aura", "Desligue o Auto quebrar gelo primeiro")
-        return
-    end
-    Farm.aura = on
-    if on and not Farm.auraRunning then
-        task.spawn(auraLoop)
-    end
-end
-
 local lastRebirths = nil
 local rebirthMaxSaid = false
 
@@ -1679,10 +1573,18 @@ local function eggInfo(key)
     return EGG_INFO[key]
 end
 
-local eggWarnAt = -100
-local hatchStats = { ok = 0, miss = 0, panelAt = -100 }
+local hatchStats = { ok = 0, miss = 0, panelAt = -100, refusedAt = -100 }
 local hatchConns = {}
-local hatchRefusedAt = -100
+local hatchLast = { key = "?", qty = 0 }
+local hatchRefusedNote = -100
+
+-- Resumo do que foi enviado e do que o cliente enxerga (para comparar com a recusa do servidor)
+local function hatchContext()
+    local info = eggInfo(hatchLast.key)
+    return "enviado " .. tostring(hatchLast.key) .. " x" .. tostring(hatchLast.qty)
+        .. " | gelo (atributo)=" .. tostring(lp_():GetAttribute("Ice"))
+        .. " | preço (config)=" .. tostring(info and info.price or "?")
+end
 
 -- Escuta a resposta do servidor: Companion.Hatch = abriu; Companion.Refused = motivo da recusa
 local function hatchListen(on)
@@ -1693,7 +1595,7 @@ local function hatchListen(on)
     if not on then
         return
     end
-    hatchStats.ok, hatchStats.miss = 0, 0
+    hatchStats.ok, hatchStats.miss, hatchStats.refusedAt = 0, 0, -100
     local hatchEv = getRemote("Companion", "Hatch")
     if hatchEv then
         hatchConns[#hatchConns + 1] = hatchEv.OnClientEvent:Connect(function()
@@ -1709,12 +1611,35 @@ local function hatchListen(on)
             if low:find("merge", 1, true) or low:find("best pets", 1, true) then
                 return
             end
-            if os.clock() - hatchRefusedAt > 8 then
-                hatchRefusedAt = os.clock()
-                Say("Ovo recusado", text)
+            hatchStats.refusedAt = os.clock()
+            if os.clock() - hatchRefusedNote > 8 then
+                hatchRefusedNote = os.clock()
+                local full = text .. " | " .. hatchContext()
+                print("[Dark Hub] Ovo recusado: " .. full)
+                Say("Ovo recusado", full)
             end
         end)
     end
+end
+
+-- Alternativa: aperta o botão do ovo na interface do PetShop (como um clique seu)
+local function clickEggUi(key, qty)
+    local pg = lp_():FindFirstChildOfClass("PlayerGui")
+    local ui = pg and pg:FindFirstChild("PetShop")
+    local card = ui and ui:FindFirstChild("Egg" .. key, true)
+    if not card then
+        return false
+    end
+    local want1, want2 = "buy" .. tostring(qty), "x" .. tostring(qty)
+    for _, d in ipairs(card:GetDescendants()) do
+        if d:IsA("TextButton") or d:IsA("ImageButton") then
+            local n = d.Name:lower()
+            if n == want1 or n == want2 then
+                return clickButton(d)
+            end
+        end
+    end
+    return false
 end
 
 local setHatchLoop = makeToggle("hatch", CFG.HatchDelay, function()
@@ -1724,29 +1649,13 @@ local setHatchLoop = makeToggle("hatch", CFG.HatchDelay, function()
         Say("Auto ovo", "Não achei Companion.Buy")
         return
     end
-    local lp = lp_()
+    -- depois de uma recusa do servidor, espera 10s antes de tentar de novo
+    if os.clock() - hatchStats.refusedAt < 10 then
+        return
+    end
     local key = Farm.eggChoice
     local qty = Farm.eggQty or 1
-    local info = eggInfo(key)
-    if info then
-        if (lp:GetAttribute("Rebirths") or 0) < (info.rebirth or 0) then
-            Farm.hatch = false
-            Say("Auto ovo", key .. " exige " .. tostring(info.rebirth) .. " rebirths")
-            return
-        end
-        local price = info.price or 0
-        local ice = lp:GetAttribute("Ice") or 0
-        if price > 0 and ice < price * qty then
-            qty = (ice >= price) and 1 or 0 -- sem gelo para o lote: tenta 1 ovo
-        end
-        if qty == 0 then
-            if os.clock() - eggWarnAt > 60 then
-                eggWarnAt = os.clock()
-                Say("Auto ovo", "Sem gelo para o ovo " .. key .. " (custa " .. tostring(price) .. ")")
-            end
-            return
-        end
-    end
+    hatchLast.key, hatchLast.qty = key, qty
 
     -- imita o que a interface faz ao abrir o painel de pets
     if os.clock() - hatchStats.panelAt > 60 then
@@ -1760,21 +1669,36 @@ local setHatchLoop = makeToggle("hatch", CFG.HatchDelay, function()
         end
     end
 
+    local function waitConfirm(before)
+        local t0 = os.clock()
+        while hatchStats.ok == before and os.clock() - t0 < 2 do
+            task.wait(0.1)
+        end
+        return hatchStats.ok > before
+    end
+
+    -- o servidor decide (preço, gelo e rebirths); aqui só enviamos e conferimos a resposta
     local before = hatchStats.ok
     r:FireServer(key, qty, true)
-    local t0 = os.clock()
-    while hatchStats.ok == before and os.clock() - t0 < 2 do
-        task.wait(0.1)
+    local okNow = waitConfirm(before)
+
+    if not okNow and os.clock() - hatchStats.refusedAt > 3 then
+        -- sem resposta nem recusa: tenta pelo botão da interface
+        hatchStats.miss = hatchStats.miss + 1
+        if hatchStats.miss >= 2 then
+            before = hatchStats.ok
+            if clickEggUi(key, qty) then
+                okNow = waitConfirm(before)
+            end
+        end
     end
-    if hatchStats.ok > before then
+
+    if okNow then
         hatchStats.miss = 0
         task.wait(0.3)
         skipHatchUi()
-    else
-        hatchStats.miss = hatchStats.miss + 1
-        if hatchStats.miss == 3 then
-            Say("Auto ovo", "O servidor não confirmou 3 compras seguidas (pets cheios? limite 400)")
-        end
+    elseif hatchStats.miss == 3 then
+        Say("Auto ovo", "O servidor não respondeu a 3 compras. " .. hatchContext())
     end
 end)
 
@@ -2029,7 +1953,6 @@ local HUB = {
                 title = "Auto Farm",
                 scripts = {
                     { name = "Auto quebrar gelo", toggle = SetAutoIce },
-                    { name = "Kill aura parado (teste) - fique a 10+ studs da esteira", toggle = SetAutoAura },
                     {
                         name = "Raridade mínima",
                         dropdown = {
@@ -2351,7 +2274,7 @@ end
 local ConfigTab = Window:CreateTab("⚙️ Configurações", ICON)
 
 ConfigTab:CreateSection("Informações")
-ConfigTab:CreateLabel("🌑 Dark Hub v4.2")
+ConfigTab:CreateLabel("🌑 Dark Hub v4.3")
 ConfigTab:CreateLabel("👥 By: Syntax, Dark & Claude")
 ConfigTab:CreateLabel("🎮 Abas de jogos: " .. #HUB)
 ConfigTab:CreateLabel("📜 Scripts: " .. totalScripts)
@@ -2403,4 +2326,4 @@ ConfigTab:CreateParagraph({
 })
 
 Notify("Dark Hub carregado 🌑", totalScripts .. " scripts em " .. #HUB .. " abas", 5)
-print("[Dark Hub] v4.2 carregado: " .. totalScripts .. " scripts")
+print("[Dark Hub] v4.3 carregado: " .. totalScripts .. " scripts")
