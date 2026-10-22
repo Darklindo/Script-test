@@ -1,11 +1,10 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor (Mobile Optimized)
--- Target: Swim Adventure (Vanta Stage-Anchored Master Hub)
+-- Executor: Delta Executor (Forçado sem Cache)
+-- Target: Swim Adventure (Vanta Stage Hub Final)
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
@@ -20,7 +19,7 @@ end)
 local clickRemote = remotesFolder and remotesFolder:FindFirstChild("Click")
 local actionRemote = remotesFolder and remotesFolder:FindFirstChild("Action")
 
--- TABELA DE COORDENADAS EXATAS (TRAIL 1 MAPEADA)
+-- MAPA DE COORDENADAS EXATAS
 local STAGE_MAP_TRAIL1 = {
     [1]  = Vector3.new(-6.6, 27.7, 482.9),
     [2]  = Vector3.new(-6.6, 37.6, 365.0),
@@ -44,12 +43,14 @@ local STAGE_MAP_TRAIL1 = {
     [20] = Vector3.new(4.3, 541.6, -2253.1),
     [21] = Vector3.new(-3.7, 585.1, -2449.1),
     [22] = Vector3.new(1.3, 630.1, -2609.9),
-    [23] = Vector3.new(-3.3, 724.6, -3009.7) -- SummitGate
+    [23] = Vector3.new(-3.3, 724.6, -3009.7)
 }
 
--- Limpeza de instâncias
-if playerGui:FindFirstChild("VantaMasterConstellationUI") then
-    playerGui.VantaMasterConstellationUI:Destroy()
+-- LIMPEZA TOTAL DE QUALQUER UI ANTERIOR
+for _, gui in ipairs(playerGui:GetChildren()) do
+    if gui.Name == "VantaMasterConstellationUI" or gui.Name == "VantaQuickAccessTP" then
+        gui:Destroy()
+    end
 end
 
 local screenGui = Instance.new("ScreenGui")
@@ -61,11 +62,9 @@ screenGui.Parent = playerGui
 -- Frame Principal
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 360, 0, 400)
-mainFrame.Position = UDim2.new(0.5, -180, 0.5, -200)
+mainFrame.Size = UDim2.new(0, 360, 0, 420)
+mainFrame.Position = UDim2.new(0.5, -180, 0.5, -210)
 mainFrame.BackgroundColor3 = Color3.fromRGB(8, 5, 18)
-mainFrame.BorderSizePixel = 0
-mainFrame.ClipsDescendants = true
 mainFrame.Visible = false
 mainFrame.Active = true
 mainFrame.Draggable = true
@@ -94,7 +93,6 @@ titleLabel.Text = "❖ VANTA // STAGE-ANCHORED HUB"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
-titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 titleLabel.Parent = topBar
 
 local closeButton = Instance.new("TextButton")
@@ -107,11 +105,12 @@ closeButton.Font = Enum.Font.GothamBold
 closeButton.TextSize = 13
 closeButton.Parent = topBar
 
+-- Container com Rolagem
 local scrollContainer = Instance.new("ScrollingFrame")
 scrollContainer.Size = UDim2.new(1, -16, 1, -54)
 scrollContainer.Position = UDim2.new(0, 8, 0, 48)
 scrollContainer.BackgroundTransparency = 1
-scrollContainer.CanvasSize = UDim2.new(0, 0, 0, 480)
+scrollContainer.CanvasSize = UDim2.new(0, 0, 0, 520)
 scrollContainer.ScrollBarThickness = 3
 scrollContainer.Parent = mainFrame
 
@@ -119,6 +118,112 @@ local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 8)
 listLayout.Parent = scrollContainer
 
+-- 1. CAMPO DO ESTÁGIO ALVO (FORÇADO NO TOPO)
+local stageConfigFrame = Instance.new("Frame")
+stageConfigFrame.Size = UDim2.new(1, -6, 0, 45)
+stageConfigFrame.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
+stageConfigFrame.Parent = scrollContainer
+
+local scCorner = Instance.new("UICorner")
+scCorner.CornerRadius = UDim.new(0, 8)
+scCorner.Parent = stageConfigFrame
+
+local scStroke = Instance.new("UIStroke")
+scStroke.Color = Color3.fromRGB(90, 40, 160)
+scStroke.Thickness = 1
+scStroke.Parent = stageConfigFrame
+
+local scLabel = Instance.new("TextLabel")
+scLabel.Size = UDim2.new(0.6, 0, 1, 0)
+scLabel.Position = UDim2.new(0, 10, 0, 0)
+scLabel.BackgroundTransparency = 1
+scLabel.Text = "🎯 Estágio Alvo (1 a 23):"
+scLabel.TextColor3 = Color3.fromRGB(230, 200, 255)
+scLabel.Font = Enum.Font.GothamBold
+scLabel.TextSize = 11
+scLabel.TextXAlignment = Enum.TextXAlignment.Left
+scLabel.Parent = stageConfigFrame
+
+local selectedTargetStage = 1
+local stageInputBox = Instance.new("TextBox")
+stageInputBox.Size = UDim2.new(0, 65, 0, 28)
+stageInputBox.Position = UDim2.new(1, -75, 0.5, -14)
+stageInputBox.BackgroundColor3 = Color3.fromRGB(35, 20, 65)
+stageInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+stageInputBox.Text = "1"
+stageInputBox.Font = Enum.Font.GothamBold
+stageInputBox.TextSize = 12
+stageInputBox.ClearTextOnFocus = false
+stageInputBox.Parent = stageConfigFrame
+
+local sibCorner = Instance.new("UICorner")
+sibCorner.CornerRadius = UDim.new(0, 6)
+sibCorner.Parent = stageInputBox
+
+stageInputBox.FocusLost:Connect(function()
+    local val = tonumber(stageInputBox.Text)
+    if val and STAGE_MAP_TRAIL1[val] then
+        selectedTargetStage = val
+    else
+        stageInputBox.Text = tostring(selectedTargetStage)
+    end
+end)
+
+-- 2. BOTÃO DE TELEPORTE DIRETO
+local tpStageBtn = Instance.new("TextButton")
+tpStageBtn.Size = UDim2.new(1, -6, 0, 38)
+tpStageBtn.BackgroundColor3 = Color3.fromRGB(45, 20, 80)
+tpStageBtn.TextColor3 = Color3.fromRGB(255, 220, 100)
+tpStageBtn.Text = "🚀 TP Instantâneo para o Estágio Alvo"
+tpStageBtn.Font = Enum.Font.GothamBold
+tpStageBtn.TextSize = 11
+tpStageBtn.Parent = scrollContainer
+
+local tsbCorner = Instance.new("UICorner")
+tsbCorner.CornerRadius = UDim.new(0, 8)
+tsbCorner.Parent = tpStageBtn
+
+local isTeleporting = false
+local function safeTweenTeleport(targetCFrame, speed)
+    if isTeleporting then return end
+    pcall(function()
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") then
+            isTeleporting = true
+            local hrp = char.HumanoidRootPart
+            local humanoid = char.Humanoid
+            humanoid.PlatformStand = true
+            local distance = (hrp.Position - targetCFrame.Position).Magnitude
+            local timeTaken = math.clamp(distance / (speed or 100), 0.1, 4.0)
+            local startTime = tick()
+            local startCFrame = hrp.CFrame
+            
+            while tick() - startTime < timeTaken do
+                local alpha = (tick() - startTime) / timeTaken
+                hrp.CFrame = startCFrame:Lerp(targetCFrame, math.clamp(alpha, 0, 1))
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+                RunService.RenderStepped:Wait()
+            end
+            
+            hrp.CFrame = targetCFrame
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            task.wait(0.05)
+            humanoid.PlatformStand = false
+            isTeleporting = false
+        end
+    end)
+end
+
+tpStageBtn.MouseButton1Click:Connect(function()
+    local stagePos = STAGE_MAP_TRAIL1[selectedTargetStage]
+    if stagePos then
+        safeTweenTeleport(CFrame.new(stagePos + Vector3.new(0, 3, 0)), 150)
+    end
+end)
+
+-- Função auxiliar para criar toggles
 local function createToggle(text, callback)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -6, 0, 40)
@@ -156,88 +261,9 @@ local function createToggle(text, callback)
     return btn
 end
 
--- Teleporte Tween Seguro
-local isTeleporting = false
-local function safeTweenTeleport(targetCFrame, speed)
-    if isTeleporting then return end
-    pcall(function()
-        local char = player.Character
-        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") then
-            isTeleporting = true
-            local hrp = char.HumanoidRootPart
-            local humanoid = char.Humanoid
-            
-            humanoid.PlatformStand = true
-            local distance = (hrp.Position - targetCFrame.Position).Magnitude
-            local timeTaken = math.clamp(distance / (speed or 100), 0.1, 4.0)
-            
-            local startTime = tick()
-            local startCFrame = hrp.CFrame
-            
-            while tick() - startTime < timeTaken do
-                local alpha = (tick() - startTime) / timeTaken
-                hrp.CFrame = startCFrame:Lerp(targetCFrame, math.clamp(alpha, 0, 1))
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
-                RunService.RenderStepped:Wait()
-            end
-            
-            hrp.CFrame = targetCFrame
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.05)
-            humanoid.PlatformStand = false
-            isTeleporting = false
-        end
-    end)
-end
-
--- Configuração do Estágio Alvo
-local selectedTargetStage = 1
-
-local stageConfigFrame = Instance.new("Frame")
-stageConfigFrame.Size = UDim2.new(1, -6, 0, 40)
-stageConfigFrame.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
-stageConfigFrame.Parent = scrollContainer
-
-local scCorner = Instance.new("UICorner")
-scCorner.CornerRadius = UDim.new(0, 8)
-scCorner.Parent = stageConfigFrame
-
-local scLabel = Instance.new("TextLabel")
-scLabel.Size = UDim2.new(0.6, 0, 1, 0)
-scLabel.Position = UDim2.new(0, 10, 0, 0)
-scLabel.BackgroundTransparency = 1
-scLabel.Text = "Estágio Alvo (1-23):"
-scLabel.TextColor3 = Color3.fromRGB(230, 200, 255)
-scLabel.Font = Enum.Font.GothamMedium
-scLabel.TextSize = 11
-scLabel.TextXAlignment = Enum.TextXAlignment.Left
-scLabel.Parent = stageConfigFrame
-
-local stageInputBox = Instance.new("TextBox")
-stageInputBox.Size = UDim2.new(0, 60, 0, 26)
-stageInputBox.Position = UDim2.new(1, -70, 0.5, -13)
-stageInputBox.BackgroundColor3 = Color3.fromRGB(35, 20, 65)
-stageInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-stageInputBox.Text = "1"
-stageInputBox.Font = Enum.Font.GothamBold
-stageInputBox.TextSize = 11
-stageInputBox.ClearTextOnFocus = false
-stageInputBox.Parent = stageConfigFrame
-
-stageInputBox.FocusLost:Connect(function()
-    local val = tonumber(stageInputBox.Text)
-    if val and STAGE_MAP_TRAIL1[val] then
-        selectedTargetStage = val
-    else
-        stageInputBox.Text = tostring(selectedTargetStage)
-    end
-end)
-
--- AUTO FARM ANCORADO PELO MAPA
+-- 3. AUTO FARM ANCORADO
 local autoFarmActive = false
-createToggle("🌾 Auto Farm Ancorado (Estágio Mapeado)", function(s)
+createToggle("🌾 Auto Farm Ancorado (Estágio Selecionado)", function(s)
     autoFarmActive = s
 end)
 
@@ -247,11 +273,9 @@ task.spawn(function()
             pcall(function()
                 local stagePos = STAGE_MAP_TRAIL1[selectedTargetStage]
                 if stagePos then
-                    -- 1. Ancola no centro da fase selecionada
                     safeTweenTeleport(CFrame.new(stagePos + Vector3.new(0, 3, 0)), 120)
                     task.wait(0.2)
                     
-                    -- 2. Varre os ovos gerados no raio local
                     local char = player.Character
                     local hrp = char and char:FindFirstChild("HumanoidRootPart")
                     local localNests = Workspace:FindFirstChild("LocalNests")
@@ -259,7 +283,6 @@ task.spawn(function()
                     if hrp and localNests then
                         for _, child in ipairs(localNests:GetChildren()) do
                             if not autoFarmActive then break end
-                            
                             local cframeTarget = child:IsA("Model") and child:GetPivot() or (child:IsA("BasePart") and child.CFrame or nil)
                             if cframeTarget then
                                 local dist = (hrp.Position - cframeTarget.Position).Magnitude
@@ -279,7 +302,7 @@ task.spawn(function()
     end
 end)
 
--- Auto Clicker
+-- 4. AUTO CLICK
 local autoClickActive = false
 createToggle("⚡ Auto Click (Força)", function(s) autoClickActive = s end)
 
@@ -292,28 +315,7 @@ task.spawn(function()
     end
 end)
 
--- Teleporte Direto de Estágio (Quick TP)
-local tpStageBtn = Instance.new("TextButton")
-tpStageBtn.Size = UDim2.new(1, -6, 0, 38)
-tpStageBtn.BackgroundColor3 = Color3.fromRGB(45, 20, 80)
-tpStageBtn.TextColor3 = Color3.fromRGB(255, 220, 100)
-tpStageBtn.Text = "🚀 TP Instantâneo para o Estágio Alvo"
-tpStageBtn.Font = Enum.Font.GothamBold
-tpStageBtn.TextSize = 11
-tpStageBtn.Parent = scrollContainer
-
-local tsbCorner = Instance.new("UICorner")
-tsbCorner.CornerRadius = UDim.new(0, 8)
-tsbCorner.Parent = tpStageBtn
-
-tpStageBtn.MouseButton1Click:Connect(function()
-    local stagePos = STAGE_MAP_TRAIL1[selectedTargetStage]
-    if stagePos then
-        safeTweenTeleport(CFrame.new(stagePos + Vector3.new(0, 3, 0)), 150)
-    end
-end)
-
--- Botão Flutuante Principal
+-- BOTÃO FLUTUANTE PRINCIPAL
 local openToggleBtn = Instance.new("TextButton")
 openToggleBtn.Name = "ConstellationToggle"
 openToggleBtn.Size = UDim2.new(0, 48, 0, 48)
