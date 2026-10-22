@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor (V13 Ultimate Definitive Edition)
--- Target: Swim Adventure (Vanta Master Hub v13)
+-- Executor: Delta Executor (V15 Master Definitive Edition)
+-- Target: Swim Adventure (Vanta Master Hub v15)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- SISTEMA DE SEGURANÇA CONTRA DUPLICAÇÃO DE THREADS (Zera loops anteriores)
+-- 1. SISTEMA DE SEGURANÇA CONTRA DUPLICAÇÃO DE THREADS
 if getgenv().VantaFarmConnection then
     pcall(function() getgenv().VantaFarmConnection() end)
 end
@@ -20,7 +20,7 @@ getgenv().VantaFarmConnection = function()
     activeConnections = false
 end
 
--- Remotes Seguros
+-- Remotes Seguros com Verificação de Nulo
 local remotesFolder = nil
 pcall(function()
     remotesFolder = ReplicatedStorage:WaitForChild("SwimAdventure", 5):WaitForChild("Remotes", 5)
@@ -94,7 +94,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 15, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // V13 SUPREME EDITION"
+titleLabel.Text = "❖ VANTA // V15 MASTER EDITION"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
@@ -121,10 +121,10 @@ listLayout.Padding = UDim.new(0, 8)
 listLayout.Parent = scrollContainer
 
 -- CONFIGURAÇÃO DE VELOCIDADE
-local userTweenSpeed = 150
+local userTweenSpeed = 120
 
--- MOTOR DE TWEEN SUPREMO E RÁPIDO (ESTILO V9 CORRIGIDO E BLINDADO)
-local function lightningTween(targetCFrame)
+-- MOTOR DE TWEEN SUPREMO (PROPORCIONAL E BLINDADO)
+local function masterTween(targetCFrame)
     local success = pcall(function()
         local char = player.Character
         if not char then return end
@@ -137,18 +137,12 @@ local function lightningTween(targetCFrame)
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
             
             local distance = (hrp.Position - targetCFrame.Position).Magnitude
-            -- Cálculo otimizado por tempo com clamp dinâmico para garantir velocidade máxima sem travamentos
-            local timeTaken = math.clamp(distance / userTweenSpeed, 0.05, 3.0)
+            local timeTaken = math.max(0.05, distance / userTweenSpeed)
             local startTime = tick()
             local startCFrame = hrp.CFrame
             
             while tick() - startTime < timeTaken do
                 if not activeConnections then break end
-                
-                -- Trava de segurança: se estiver voltando com o ovo e ele sumir, aborta o trajeto para evitar bugs
-                if player:GetAttribute("CarryEgg") ~= true and distance > 400 and startCFrame ~= hrp.CFrame then
-                    break
-                end
                 
                 local alpha = (tick() - startTime) / timeTaken
                 local smoothAlpha = 1 - (1 - alpha) * (1 - alpha)
@@ -292,9 +286,9 @@ setBaseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- AUTO FARM V13 SUPREME OP
+-- AUTO FARM V15 MASTER (BLINDADO E PERFEITO)
 local autoFarmActive = false
-createToggle("🌾 Auto Farm (V13 Supreme OP)", function(s)
+createToggle("🌾 Auto Farm (V15 Master Edition)", function(s)
     autoFarmActive = s
 end)
 
@@ -313,12 +307,12 @@ task.spawn(function()
                 end
                 
                 if stagePos and hrp then
-                    -- 1. VAI PARA A FASE NA VELOCIDADE TOTAL
+                    -- 1. VAI PARA A FASE
                     statusBox.Text = "Status: Indo para o Estágio " .. selectedTargetStage .. "..."
-                    lightningTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
+                    masterTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
                     task.wait(0.15)
                     
-                    -- 2. BUSCA O OVO MAIS PRÓXIMO NA FASE
+                    -- 2. BUSCA O OVO NA FASE
                     statusBox.Text = "Status: Procurando ovos ativos..."
                     local localNests = Workspace:FindFirstChild("LocalNests")
                     local targetPrompt = nil
@@ -343,14 +337,14 @@ task.spawn(function()
                         end
                     end
                     
-                    -- 3. ROUBA O OVO COM GARANTIA ABSOLUTA
+                    -- 3. ROUBA O OVO COM GARANTIA
                     if targetPrompt and targetPrompt.Parent then
                         local eggPart = targetPrompt.Parent
                         local eggCFrame = eggPart:IsA("BasePart") and eggPart.CFrame or (eggPart:IsA("Model") and eggPart:GetPivot() or nil)
                         
                         if eggCFrame then
                             statusBox.Text = "Status: Coletando ovo..."
-                            lightningTween(eggCFrame + Vector3.new(0, 2, 0))
+                            masterTween(eggCFrame + Vector3.new(0, 2, 0))
                             task.wait(0.1)
                             
                             local attempts = 0
@@ -369,10 +363,10 @@ task.spawn(function()
                         task.wait(0.4)
                     end
                     
-                    -- 4. RETORNA COM VELOCIDADE MÁXIMA E POUSO SUAVE INTEGRADO
+                    -- 4. RETORNA PARA A BASE COM ESTABILIDADE MÁXIMA
                     if player:GetAttribute("CarryEgg") == true then
-                        statusBox.Text = "Status: Retornando rapidamente para a Base..."
-                        lightningTween(baseCFrame)
+                        statusBox.Text = "Status: Retornando para a Base..."
+                        masterTween(baseCFrame)
                         task.wait(0.2)
                         
                         statusBox.Text = "Status: Depositando ovo..."
