@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor (Fast & Smooth Return v11)
--- Target: Swim Adventure (Vanta Master Hub v11)
+-- Executor: Delta Executor (V12 Definitive Master Edition)
+-- Target: Swim Adventure (Vanta Ultimate OP Farm)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -10,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- SISTEMA DE SEGURANÇA CONTRA DUPLICAÇÃO DE THREADS
+-- SISTEMA DE SEGURANÇA CONTRA DUPLICAÇÃO DE THREADS (Zera loops anteriores)
 if getgenv().VantaFarmConnection then
     pcall(function() getgenv().VantaFarmConnection() end)
 end
@@ -94,7 +94,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 15, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // FAST RETURN V11"
+titleLabel.Text = "❖ VANTA // V12 DEFINITIVE EDITION"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
@@ -123,8 +123,8 @@ listLayout.Parent = scrollContainer
 -- CONFIGURAÇÃO DE VELOCIDADE
 local userTweenSpeed = 120
 
--- TWEEN DE IDA E VOLTA RÁPIDO COM CURVA SUAVE (EASE-OUT)
-local function optimizedTween(targetCFrame)
+-- 1. TWEEN DE IDA (RÁPIDO E SUAVE)
+local function outboundTween(targetCFrame)
     local success = pcall(function()
         local char = player.Character
         if not char then return end
@@ -137,20 +137,13 @@ local function optimizedTween(targetCFrame)
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
             
             local distance = (hrp.Position - targetCFrame.Position).Magnitude
-            -- Respeita perfeitamente a velocidade configurada (sem lentidões artificiais)
             local timeTaken = math.clamp(distance / userTweenSpeed, 0.05, 3.5)
             local startTime = tick()
             local startCFrame = hrp.CFrame
             
             while tick() - startTime < timeTaken do
                 if not activeConnections then break end
-                -- Se estiver voltando com o ovo e ele sumir por algum motivo, cancela o trajeto
-                if player:GetAttribute("CarryEgg") == false and startCFrame ~= hrp.CFrame and distance > 500 then
-                    break
-                end
-                
                 local alpha = (tick() - startTime) / timeTaken
-                -- Curva matemática que mantém alta velocidade e desacelera suavemente apenas no último instante
                 local smoothAlpha = 1 - (1 - alpha) * (1 - alpha)
                 
                 hrp.CFrame = startCFrame:Lerp(targetCFrame, smoothAlpha)
@@ -171,6 +164,69 @@ local function optimizedTween(targetCFrame)
     end
 end
 
+-- 2. TWEEN DE RETORNO INTELIGENTE (RÁPIDO + FREADA SUAVE NOS ÚLTIMOS 80 STUDS)
+local function smartReturnTween(targetCFrame)
+    local success = pcall(function()
+        local char = player.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local humanoid = char:FindFirstChild("Humanoid")
+        
+        if hrp and humanoid then
+            humanoid.PlatformStand = true
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+            
+            local targetPos = targetCFrame.Position
+            
+            while activeConnections and (hrp.Position - targetPos).Magnitude > 2 do
+                -- Trava de segurança absoluta: se perder o ovo na mão, aborta o retorno
+                if player:GetAttribute("CarryEgg") ~= true then
+                    break
+                end
+                
+                local currentDist = (hrp.Position - targetPos).Magnitude
+                local currentSpeed = userTweenSpeed
+                
+                -- Se estiver a 80 studs ou menos da base, desacelera suavemente (estilo v9 aprimorado)
+                if currentDist <= 80 then
+                    currentSpeed = math.clamp(currentDist * 1.8, 35, userTweenSpeed)
+                end
+                
+                local dt = RunService.RenderStepped:Wait()
+                local step = currentSpeed * dt
+                
+                if currentDist <= step then
+                    hrp.CFrame = targetCFrame
+                    break
+                else
+                    local direction = (targetPos - hrp.Position).Unit
+                    hrp.CFrame = CFrame.new(hrp.Position + direction * step, targetPos)
+                end
+                
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end
+            
+            hrp.CFrame = targetCFrame
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            task.wait(0.08)
+            
+            humanoid.PlatformStand = false
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+        end
+    end)
+    if not success then
+        pcall(function() player.Character.Humanoid.PlatformStand = false end)
+    end
+end
+
 -- UI DE CONFIGURAÇÃO DE VELOCIDADE
 local speedConfigFrame = Instance.new("Frame")
 speedConfigFrame.Size = UDim2.new(1, -6, 0, 40)
@@ -181,7 +237,7 @@ local spLabel = Instance.new("TextLabel")
 spLabel.Size = UDim2.new(0.6, 0, 1, 0)
 spLabel.Position = UDim2.new(0, 10, 0, 0)
 spLabel.BackgroundTransparency = 1
-spLabel.Text = "⚡ Velocidade Tween (50-200):"
+spLabel.Text = "⚡ Velocidade Tween (50-250):"
 spLabel.TextColor3 = Color3.fromRGB(230, 200, 255)
 spLabel.Font = Enum.Font.GothamBold
 spLabel.TextSize = 11
@@ -200,7 +256,7 @@ speedInputBox.Parent = speedConfigFrame
 
 speedInputBox.FocusLost:Connect(function()
     local val = tonumber(speedInputBox.Text)
-    if val and val >= 30 and val <= 250 then userTweenSpeed = val else speedInputBox.Text = tostring(userTweenSpeed) end
+    if val and val >= 30 and val <= 300 then userTweenSpeed = val else speedInputBox.Text = tostring(userTweenSpeed) end
 end)
 
 -- UI DE SELEÇÃO DE ESTÁGIO
@@ -292,9 +348,9 @@ setBaseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- AUTO FARM BLINDADO (ALTA VELOCIDADE + FREADA SUAVE NA CHEGADA)
+-- AUTO FARM V12 DEFINITIVO (OP & BLINDADO)
 local autoFarmActive = false
-createToggle("🌾 Auto Farm (Fast Return v11)", function(s)
+createToggle("🌾 Auto Farm (V12 Ultimate OP)", function(s)
     autoFarmActive = s
 end)
 
@@ -313,12 +369,12 @@ task.spawn(function()
                 end
                 
                 if stagePos and hrp then
-                    -- 1. VAI PARA A FASE NA VELOCIDADE MÁXIMA
+                    -- 1. VAI PARA A FASE RÁPIDO
                     statusBox.Text = "Status: Indo para o Estágio " .. selectedTargetStage .. "..."
-                    optimizedTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
+                    outboundTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
                     task.wait(0.2)
                     
-                    -- 2. BUSCA O OVO NA FASE
+                    -- 2. BUSCA O OVO MAIS PRÓXIMO NA FASE
                     statusBox.Text = "Status: Procurando ovos ativos..."
                     local localNests = Workspace:FindFirstChild("LocalNests")
                     local targetPrompt = nil
@@ -343,24 +399,24 @@ task.spawn(function()
                         end
                     end
                     
-                    -- 3. ROUBA O OVO COM GARANTIA
+                    -- 3. ROUBA O OVO COM LOOP DE GARANTIA ABSOLUTA
                     if targetPrompt and targetPrompt.Parent then
                         local eggPart = targetPrompt.Parent
                         local eggCFrame = eggPart:IsA("BasePart") and eggPart.CFrame or (eggPart:IsA("Model") and eggPart:GetPivot() or nil)
                         
                         if eggCFrame then
                             statusBox.Text = "Status: Coletando ovo..."
-                            optimizedTween(eggCFrame + Vector3.new(0, 2, 0))
+                            outboundTween(eggCFrame + Vector3.new(0, 2, 0))
                             task.wait(0.1)
                             
                             local attempts = 0
-                            while player:GetAttribute("CarryEgg") ~= true and attempts < 10 and activeConnections and autoFarmActive do
+                            while player:GetAttribute("CarryEgg") ~= true and attempts < 12 and activeConnections and autoFarmActive do
                                 fireproximityprompt(targetPrompt)
                                 if actionRemote then 
                                     actionRemote:FireServer("PickUp", eggPart.Name) 
                                     actionRemote:FireServer("StealEgg", eggPart.Name)
                                 end
-                                task.wait(0.25)
+                                task.wait(0.2)
                                 attempts = attempts + 1
                             end
                         end
@@ -369,16 +425,15 @@ task.spawn(function()
                         task.wait(0.5)
                     end
                     
-                    -- 4. RETORNA À BASE (RÁPIDO E COM FREADA MATEMÁTICA SEGURA)
+                    -- 4. RETORNA COM O SMART RETURN (ALTA VELOCIDADE + FREADA SUAVE A 80 STUDS DA BASE)
                     if player:GetAttribute("CarryEgg") == true then
-                        statusBox.Text = "Status: Retornando rapidamente..."
-                        optimizedTween(baseCFrame)
+                        statusBox.Text = "Status: Retornando (Smart Landing)..."
+                        smartReturnTween(baseCFrame)
                         task.wait(0.3)
                         
                         statusBox.Text = "Status: Depositando ovo..."
                         for _, desc in ipairs(Workspace:GetDescendants()) do
                             if desc:IsA("ProximityPrompt") then
-                                local pPart = desc.Parent
                                 local pPart = desc.Parent
                                 if pPart then
                                     local pPos = pPart:IsA("BasePart") and pPart.Position or (pPart:IsA("Model") and pPart:GetPivot().Position)
@@ -395,7 +450,7 @@ task.spawn(function()
                             actionRemote:FireServer("Deposit")
                         end
                         
-                        statusBox.Text = "Status: Ovo Depositado!"
+                        statusBox.Text = "Status: Ovo Depositado com Sucesso!"
                         task.wait(0.6)
                     end
                 end
@@ -439,7 +494,6 @@ openCorner.CornerRadius = UDim.new(1, 0)
 openCorner.Parent = openToggleBtn
 
 local isOpen = false
-openToggleBtn.MouseButton1Click:Connect(function5 = function() end) -- Syntax fix clean
 openToggleBtn.MouseButton1Click:Connect(function()
     isOpen = not isOpen
     mainFrame.Visible = isOpen
