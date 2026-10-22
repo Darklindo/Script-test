@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
 -- Executor: Delta Executor (Mobile Optimized)
--- Target: Swim Adventure (Vanta Ultimate Master Hub - Final Version)
+-- Target: Swim Adventure (Vanta Ultimate Master Hub - Clean Version)
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -12,8 +12,11 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Mapeamento de Remotes
-local remotesFolder = ReplicatedStorage:WaitForChild("SwimAdventure", 5) and ReplicatedStorage.SwimAdventure:WaitForChild("Remotes", 5)
+-- Mapeamento de Remotes com pcall de segurança
+local remotesFolder = nil
+pcall(function()
+    remotesFolder = ReplicatedStorage:WaitForChild("SwimAdventure", 5):WaitForChild("Remotes", 5)
+end)
 local clickRemote = remotesFolder and remotesFolder:FindFirstChild("Click")
 local actionRemote = remotesFolder and remotesFolder:FindFirstChild("Action")
 
@@ -108,7 +111,6 @@ local function createToggle(text, callback)
     btn.Size = UDim2.new(1, -6, 0, 40)
     btn.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
     btn.TextColor3 = Color3.fromRGB(230, 200, 255)
-    btn.Text = "   " + text -- Fallback seguro
     btn.Text = "   " .. text
     btn.Font = Enum.Font.GothamMedium
     btn.TextSize = 11
@@ -141,7 +143,7 @@ local function createToggle(text, callback)
     return btn
 end
 
--- Teleporte Tween Seguro com PlatformStand e zeramento físico
+-- Teleporte Tween Seguro com PlatformStand
 local isTeleporting = false
 local farmTweenSpeed = 100
 
@@ -175,7 +177,7 @@ local function safeTweenTeleport(targetCFrame, speed)
     end)
 end
 
--- Hierarquia de 16 Níveis Extraída do AssetRegistry
+-- Hierarquia de 16 Níveis
 local RARITY_HIERARCHY = {
     ["Common"] = 1, ["Uncommon"] = 2, ["Rare"] = 3, ["Epic"] = 4,
     ["Legendary"] = 5, ["Mythic"] = 6, ["Secret"] = 7, ["Divine"] = 8,
@@ -192,7 +194,7 @@ local rarityList = {
 local currentRarityIndex = 1
 local selectedMinRarity = rarityList[currentRarityIndex]
 
--- Painel de Configuração do Auto Farm (Filtro + Velocidade)
+-- Painel de Configuração do Auto Farm
 local farmConfigFrame = Instance.new("Frame")
 farmConfigFrame.Size = UDim2.new(1, -6, 0, 75)
 farmConfigFrame.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
@@ -284,7 +286,7 @@ local function passesRarityFilter(item)
     return itemWeight >= minWeight
 end
 
--- Auto Farm Direcionado (Varredura baseada em LocalNests e SwimWorld.Eggs)
+-- Auto Farm
 local autoFarmActive = false
 createToggle("🌾 Auto Farm (Nests & Eggs + Tween)", function(s)
     autoFarmActive = s
@@ -295,8 +297,6 @@ task.spawn(function()
         if autoFarmActive then
             pcall(function()
                 local targets = {}
-                
-                -- Varre LocalNests confirmado pelo Scanner
                 local localNests = Workspace:FindFirstChild("LocalNests")
                 if localNests then
                     for _, child in ipairs(localNests:GetChildren()) do
@@ -306,7 +306,6 @@ task.spawn(function()
                     end
                 end
                 
-                -- Varre SwimWorld.Eggs se existir
                 local swimWorld = Workspace:FindFirstChild("SwimWorld")
                 if swimWorld then
                     local eggsFolder = swimWorld:FindFirstChild("Eggs")
@@ -321,7 +320,6 @@ task.spawn(function()
                 
                 for _, obj in ipairs(targets) do
                     if not autoFarmActive then break end
-                    
                     local cframeTarget = nil
                     if obj:IsA("Model") then
                         cframeTarget = obj:GetPivot()
@@ -334,7 +332,6 @@ task.spawn(function()
                     
                     if cframeTarget then
                         safeTweenTeleport(cframeTarget * CFrame.new(0, 3, 0), farmTweenSpeed)
-                        
                         local guid = obj:GetAttribute("GUID") or obj:GetAttribute("Id") or obj.Name
                         if actionRemote then
                             actionRemote:FireServer("PickUp", guid)
