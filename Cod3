@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor
--- Target: Swim Adventure (Vanta Dynamic Stage Nest Farm)
+-- Executor: Delta Executor (Optimized & Bug-Free)
+-- Target: Swim Adventure (Vanta Master Hub Final Edition)
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -11,7 +11,7 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Remotes
+-- Remotes Seguros
 local remotesFolder = nil
 pcall(function()
     remotesFolder = ReplicatedStorage:WaitForChild("SwimAdventure", 5):WaitForChild("Remotes", 5)
@@ -19,7 +19,7 @@ end)
 local clickRemote = remotesFolder and remotesFolder:FindFirstChild("Click")
 local actionRemote = remotesFolder and remotesFolder:FindFirstChild("Action")
 
--- COORDENADAS DOS ESTÁGIOS (TRAIL 1)
+-- MAPA DE COORDENADAS EXATAS (TRAIL 1)
 local STAGE_MAP_TRAIL1 = {
     [1]  = Vector3.new(-6.6, 27.7, 482.9),
     [2]  = Vector3.new(-6.6, 37.6, 365.0),
@@ -46,20 +46,24 @@ local STAGE_MAP_TRAIL1 = {
     [23] = Vector3.new(-3.3, 724.6, -3009.7)
 }
 
--- LIMPEZA DE UI
+-- LIMPEZA DE INSTÂNCIAS ANTERIORES (Evita duplicação)
 for _, gui in ipairs(playerGui:GetChildren()) do
-    if gui.Name == "VantaMasterConstellationUI" then gui:Destroy() end
+    if gui.Name == "VantaMasterConstellationUI" then 
+        gui:Destroy() 
+    end
 end
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "VantaMasterConstellationUI"
 screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 9999
 screenGui.Parent = playerGui
 
+-- FRAME PRINCIPAL
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 360, 0, 380)
-mainFrame.Position = UDim2.new(0.5, -180, 0.5, -190)
+mainFrame.Size = UDim2.new(0, 360, 0, 410)
+mainFrame.Position = UDim2.new(0.5, -180, 0.5, -205)
 mainFrame.BackgroundColor3 = Color3.fromRGB(8, 5, 18)
 mainFrame.Visible = false
 mainFrame.Active = true
@@ -75,6 +79,7 @@ mainStroke.Color = Color3.fromRGB(170, 70, 255)
 mainStroke.Thickness = 2
 mainStroke.Parent = mainFrame
 
+-- BARRA SUPERIOR
 local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 44)
 topBar.BackgroundColor3 = Color3.fromRGB(15, 10, 30)
@@ -84,7 +89,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 15, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // DYNAMIC NEST FARM"
+titleLabel.Text = "❖ VANTA // MASTER HUB FINAL"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
@@ -98,11 +103,12 @@ closeButton.TextColor3 = Color3.fromRGB(220, 170, 255)
 closeButton.Text = "✕"
 closeButton.Parent = topBar
 
+-- SCROLL CONTAINER
 local scrollContainer = Instance.new("ScrollingFrame")
 scrollContainer.Size = UDim2.new(1, -16, 1, -54)
 scrollContainer.Position = UDim2.new(0, 8, 0, 48)
 scrollContainer.BackgroundTransparency = 1
-scrollContainer.CanvasSize = UDim2.new(0, 0, 0, 420)
+scrollContainer.CanvasSize = UDim2.new(0, 0, 0, 460)
 scrollContainer.ScrollBarThickness = 3
 scrollContainer.Parent = mainFrame
 
@@ -110,7 +116,7 @@ local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 8)
 listLayout.Parent = scrollContainer
 
--- TWEEN SUAVE
+-- TWEEN SUAVE E SEGURO
 local isTeleporting = false
 local function safeTweenTeleport(targetCFrame, speed)
     if isTeleporting then return end
@@ -122,7 +128,7 @@ local function safeTweenTeleport(targetCFrame, speed)
             local humanoid = char.Humanoid
             humanoid.PlatformStand = true
             local distance = (hrp.Position - targetCFrame.Position).Magnitude
-            local timeTaken = math.clamp(distance / (speed or 150), 0.1, 3.0)
+            local timeTaken = math.clamp(distance / (speed or 160), 0.1, 3.0)
             local startTime = tick()
             local startCFrame = hrp.CFrame
             
@@ -144,16 +150,12 @@ local function safeTweenTeleport(targetCFrame, speed)
     end)
 end
 
--- CONFIGURAÇÃO DE ESTÁGIO
+-- SELETOR DE ESTÁGIO
 local selectedTargetStage = 1
 local stageConfigFrame = Instance.new("Frame")
 stageConfigFrame.Size = UDim2.new(1, -6, 0, 45)
 stageConfigFrame.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
 stageConfigFrame.Parent = scrollContainer
-
-local scCorner = Instance.new("UICorner")
-scCorner.CornerRadius = UDim.new(0, 8)
-scCorner.Parent = stageConfigFrame
 
 local scLabel = Instance.new("TextLabel")
 scLabel.Size = UDim2.new(0.6, 0, 1, 0)
@@ -178,9 +180,28 @@ stageInputBox.Parent = stageConfigFrame
 
 stageInputBox.FocusLost:Connect(function()
     local val = tonumber(stageInputBox.Text)
-    if val and STAGE_MAP_TRAIL1[val] then selectedTargetStage = val else stageInputBox.Text = tostring(selectedTargetStage) end
+    if val and STAGE_MAP_TRAIL1[val] then 
+        selectedTargetStage = val 
+    else 
+        stageInputBox.Text = tostring(selectedTargetStage) 
+    end
 end)
 
+-- STATUS VISUAL DO FARM
+local statusBox = Instance.new("TextLabel")
+statusBox.Size = UDim2.new(1, -6, 0, 32)
+statusBox.BackgroundColor3 = Color3.fromRGB(25, 15, 45)
+statusBox.TextColor3 = Color3.fromRGB(150, 255, 150)
+statusBox.Text = "Status: Aguardando Ativação..."
+statusBox.Font = Enum.Font.GothamMedium
+statusBox.TextSize = 10
+statusBox.Parent = scrollContainer
+
+local sbCorner = Instance.new("UICorner")
+sbCorner.CornerRadius = UDim.new(0, 6)
+sbCorner.Parent = statusBox
+
+-- FUNÇÃO CRIAR BOTÕES TOGGLE
 local function createToggle(text, callback)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -6, 0, 40)
@@ -205,7 +226,7 @@ local function createToggle(text, callback)
     return btn
 end
 
--- DEFINIÇÃO DA BASE
+-- BOTÃO CADASTRAR BASE
 local baseCFrame = nil
 local setBaseBtn = Instance.new("TextButton")
 setBaseBtn.Size = UDim2.new(1, -6, 0, 36)
@@ -227,9 +248,9 @@ setBaseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- AUTO FARM DINÂMICO (Varredura de Ovos Próximos no Estágio)
+-- AUTO FARM DINÂMICO PERFEITO
 local autoFarmActive = false
-createToggle("🌾 Auto Farm Dinâmico (Varredura por Estágio)", function(s)
+createToggle("🌾 Auto Farm Dinâmico (Estágio -> Base)", function(s)
     autoFarmActive = s
 end)
 
@@ -241,12 +262,20 @@ task.spawn(function()
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 
+                if not baseCFrame then
+                    statusBox.Text = "Status: ERRO! Defina sua Base primeiro."
+                    task.wait(1)
+                    return
+                end
+                
                 if stagePos and hrp then
-                    -- 1. VAI ATÉ O CENTRO DO ESTÁGIO SELECIONADO
+                    -- 1. VIAJA PARA O ESTÁGIO
+                    statusBox.Text = "Status: Indo para o Estágio " .. selectedTargetStage .. "..."
                     safeTweenTeleport(CFrame.new(stagePos + Vector3.new(0, 3, 0)), 160)
                     task.wait(0.3)
                     
-                    -- 2. VARRE A PASTA LOCALNESTS PROCURANDO PROXIMITY PROMPTS VIVOS NAQUELE RAIO
+                    -- 2. VARRE OVOS PRÓXIMOS
+                    statusBox.Text = "Status: Procurando ovos na fase..."
                     local localNests = Workspace:FindFirstChild("LocalNests")
                     local targetPrompt = nil
                     local minPromptDist = math.huge
@@ -264,7 +293,6 @@ task.spawn(function()
                                 
                                 if pPos then
                                     local distToStage = (stagePos - pPos).Magnitude
-                                    -- Se o ovo estiver no raio de 120 studs do estágio selecionado
                                     if distToStage <= 120 then
                                         local distToPlayer = (hrp.Position - pPos).Magnitude
                                         if distToPlayer < minPromptDist then
@@ -277,13 +305,14 @@ task.spawn(function()
                         end
                     end
                     
-                    -- 3. SE ENCONTROU UM OVO NO ESTÁGIO, VAI ATÉ ELE E ROUBA
+                    -- 3. ROUBA O OVO
                     if targetPrompt and targetPrompt.Parent then
                         local eggPart = targetPrompt.Parent
                         local eggCFrame = eggPart:IsA("BasePart") and eggPart.CFrame or (eggPart:IsA("Model") and eggPart:GetPivot() or nil)
                         
                         if eggCFrame then
-                            safeTweenTeleport(eggCFrame + Vector3.new(0, 2, 0), 140)
+                            statusBox.Text = "Status: Coletando ovo..."
+                            safeTweenTeleport(eggCFrame + Vector3.new(0, 2, 0), 160)
                             task.wait(0.15)
                             
                             fireproximityprompt(targetPrompt)
@@ -291,19 +320,16 @@ task.spawn(function()
                                 actionRemote:FireServer("PickUp", eggPart.Name) 
                                 actionRemote:FireServer("StealEgg", eggPart.Name)
                             end
-                            task.wait(0.3)
+                            task.wait(0.4)
                         end
+                    else
+                        statusBox.Text = "Status: Aguardando respawn de ovos..."
                     end
                     
-                    -- 4. SE CARREGOU O OVO, VOLTA PARA A BASE E DEPOSITA
+                    -- 4. VOLTA PRA BASE SE ESTIVER CARREGANDO
                     if player:GetAttribute("CarryEgg") == true then
-                        if baseCFrame then
-                            safeTweenTeleport(baseCFrame, 200)
-                        else
-                            local spawnPoint = Workspace:FindFirstChild("SpawnLocation")
-                            if spawnPoint then safeTweenTeleport(spawnPoint.CFrame + Vector3.new(0, 3, 0), 200) end
-                        end
-                        
+                        statusBox.Text = "Status: Levando ovo para a Base..."
+                        safeTweenTeleport(baseCFrame, 200)
                         task.wait(0.4)
                         
                         if actionRemote then
@@ -312,27 +338,32 @@ task.spawn(function()
                             actionRemote:FireServer("HatchEgg")
                             actionRemote:FireServer("Deposit")
                         end
+                        statusBox.Text = "Status: Ovo depositado!"
                         task.wait(0.6)
                     end
                 end
             end)
+        else
+            statusBox.Text = "Status: Em repouso."
         end
         task.wait(0.4)
     end
 end)
 
--- AUTO CLICK
+-- AUTO CLICKER
 local autoClickActive = false
-createToggle("⚡ Auto Click (Força)", function(s) autoClickActive = s end)
+createToggle("⚡ Auto Click (Ganhar Força)", function(s) autoClickActive = s end)
 
 task.spawn(function()
     while true do
-        if autoClickActive and clickRemote then pcall(function() clickRemote:FireServer() end) end
+        if autoClickActive and clickRemote then 
+            pcall(function() clickRemote:FireServer() end) 
+        end
         task.wait(0.05)
     end
 end)
 
--- BOTÃO FLUTUANTE
+-- BOTÃO FLUTUANTE DE ABERTURA
 local openToggleBtn = Instance.new("TextButton")
 openToggleBtn.Name = "ConstellationToggle"
 openToggleBtn.Size = UDim2.new(0, 48, 0, 48)
