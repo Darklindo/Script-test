@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor (Forçado sem Cache)
--- Target: Swim Adventure (Vanta Stage Hub Final)
+-- Executor: Delta Executor (Fixed Picker & Base Delivery)
+-- Target: Swim Adventure (Vanta Stage-Anchored Master Hub v3)
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -19,7 +19,7 @@ end)
 local clickRemote = remotesFolder and remotesFolder:FindFirstChild("Click")
 local actionRemote = remotesFolder and remotesFolder:FindFirstChild("Action")
 
--- MAPA DE COORDENADAS EXATAS
+-- MAPA DE COORDENADAS EXATAS (TRAIL 1)
 local STAGE_MAP_TRAIL1 = {
     [1]  = Vector3.new(-6.6, 27.7, 482.9),
     [2]  = Vector3.new(-6.6, 37.6, 365.0),
@@ -46,7 +46,7 @@ local STAGE_MAP_TRAIL1 = {
     [23] = Vector3.new(-3.3, 724.6, -3009.7)
 }
 
--- LIMPEZA TOTAL DE QUALQUER UI ANTERIOR
+-- LIMPEZA DE UIS ANTERIORES
 for _, gui in ipairs(playerGui:GetChildren()) do
     if gui.Name == "VantaMasterConstellationUI" or gui.Name == "VantaQuickAccessTP" then
         gui:Destroy()
@@ -89,7 +89,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 15, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // STAGE-ANCHORED HUB"
+titleLabel.Text = "❖ VANTA // STAGE-ANCHORED HUB V3"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
@@ -118,7 +118,7 @@ local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 8)
 listLayout.Parent = scrollContainer
 
--- 1. CAMPO DO ESTÁGIO ALVO (FORÇADO NO TOPO)
+-- CONFIGURAÇÃO DO ESTÁGIO ALVO
 local stageConfigFrame = Instance.new("Frame")
 stageConfigFrame.Size = UDim2.new(1, -6, 0, 45)
 stageConfigFrame.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
@@ -169,7 +169,7 @@ stageInputBox.FocusLost:Connect(function()
     end
 end)
 
--- 2. BOTÃO DE TELEPORTE DIRETO
+-- BOTÃO DE TELEPORTE DIRETO
 local tpStageBtn = Instance.new("TextButton")
 tpStageBtn.Size = UDim2.new(1, -6, 0, 38)
 tpStageBtn.BackgroundColor3 = Color3.fromRGB(45, 20, 80)
@@ -223,7 +223,6 @@ tpStageBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Função auxiliar para criar toggles
 local function createToggle(text, callback)
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, -6, 0, 40)
@@ -261,9 +260,9 @@ local function createToggle(text, callback)
     return btn
 end
 
--- 3. AUTO FARM ANCORADO
+-- AUTO FARM CORRIGIDO (Varredura Profunda na pasta Eggs e disparo correto do Remote)
 local autoFarmActive = false
-createToggle("🌾 Auto Farm Ancorado (Estágio Selecionado)", function(s)
+createToggle("🌾 Auto Farm Ancorado (Coleta Corrigida)", function(s)
     autoFarmActive = s
 end)
 
@@ -273,24 +272,44 @@ task.spawn(function()
             pcall(function()
                 local stagePos = STAGE_MAP_TRAIL1[selectedTargetStage]
                 if stagePos then
+                    -- 1. Ancora na fase selecionada
                     safeTweenTeleport(CFrame.new(stagePos + Vector3.new(0, 3, 0)), 120)
-                    task.wait(0.2)
+                    task.wait(0.3)
                     
                     local char = player.Character
                     local hrp = char and char:FindFirstChild("HumanoidRootPart")
                     local localNests = Workspace:FindFirstChild("LocalNests")
                     
                     if hrp and localNests then
-                        for _, child in ipairs(localNests:GetChildren()) do
-                            if not autoFarmActive then break end
-                            local cframeTarget = child:IsA("Model") and child:GetPivot() or (child:IsA("BasePart") and child.CFrame or nil)
-                            if cframeTarget then
-                                local dist = (hrp.Position - cframeTarget.Position).Magnitude
-                                if dist <= 120 then
-                                    safeTweenTeleport(cframeTarget * CFrame.new(0, 3, 0), 100)
-                                    local guid = child:GetAttribute("GUID") or child:GetAttribute("Id") or child.Name
-                                    if actionRemote then actionRemote:FireServer("PickUp", guid) end
-                                    task.wait(0.15)
+                        -- Varre especificamente a pasta de Eggs e Nests para pegar o ID real
+                        local searchFolders = {localNests:FindFirstChild("Eggs"), localNests:FindFirstChild("Nests"), localNests}
+                        
+                        for _, folder in ipairs(searchFolders) do
+                            if folder then
+                                for _, child in ipairs(folder:GetChildren()) do
+                                    if not autoFarmActive then break end
+                                    
+                                    local cframeTarget = nil
+                                    if child:IsA("Model") then
+                                        cframeTarget = child:GetPivot()
+                                    elseif child:IsA("BasePart") then
+                                        cframeTarget = child.CFrame
+                                    end
+                                    
+                                    if cframeTarget then
+                                        local dist = (hrp.Position - cframeTarget.Position).Magnitude
+                                        if dist <= 140 then
+                                            safeTweenTeleport(cframeTarget * CFrame.new(0, 2, 0), 100)
+                                            
+                                            -- Dispara múltiplos padrões de Remote conhecidos do jogo para garantir o depósito na Base/Pen
+                                            if actionRemote then
+                                                actionRemote:FireServer("PickUp", child.Name)
+                                                actionRemote:FireServer("Claim", child.Name)
+                                                actionRemote:FireServer("StoreEgg", child.Name)
+                                            end
+                                            task.wait(0.2)
+                                        end
+                                    end
                                 end
                             end
                         end
@@ -302,7 +321,7 @@ task.spawn(function()
     end
 end)
 
--- 4. AUTO CLICK
+-- AUTO CLICK
 local autoClickActive = false
 createToggle("⚡ Auto Click (Força)", function(s) autoClickActive = s end)
 
