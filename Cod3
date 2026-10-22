@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor (Production Grade & Bug-Free)
--- Target: Swim Adventure (Vanta Master Hub Production v8)
+-- Executor: Delta Executor (Pure Blinded Auto Farm Edition)
+-- Target: Swim Adventure (Vanta Ultimate Harvester v9)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -10,24 +10,23 @@ local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- 1. SISTEMA DE SEGURANÇA CONTRA DUPLICAÇÃO (Encerra loops anteriores ao reinjetar)
-if getgenv().VantaHubConnection then
-    pcall(function() getgenv().VantaHubConnection() end)
+-- SISTEMA DE SEGURANÇA CONTRA DUPLICAÇÃO DE THREADS
+if getgenv().VantaFarmConnection then
+    pcall(function() getgenv().VantaFarmConnection() end)
 end
 
 local activeConnections = true
-getgenv().VantaHubConnection = function()
+getgenv().VantaFarmConnection = function()
     activeConnections = false
 end
 
--- Remotes Seguros com Verificação de Nulo
+-- Remotes Seguros
 local remotesFolder = nil
 pcall(function()
     remotesFolder = ReplicatedStorage:WaitForChild("SwimAdventure", 5):WaitForChild("Remotes", 5)
 end)
 local clickRemote = remotesFolder and remotesFolder:FindFirstChild("Click")
 local actionRemote = remotesFolder and remotesFolder:FindFirstChild("Action")
-local eggEventRemote = remotesFolder and remotesFolder:FindFirstChild("EggEvent")
 
 -- MAPA DE COORDENADAS EXATAS (TRAIL 1)
 local STAGE_MAP_TRAIL1 = {
@@ -69,8 +68,8 @@ screenGui.Parent = playerGui
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 360, 0, 430)
-mainFrame.Position = UDim2.new(0.5, -180, 0.5, -215)
+mainFrame.Size = UDim2.new(0, 360, 0, 380)
+mainFrame.Position = UDim2.new(0.5, -180, 0.5, -190)
 mainFrame.BackgroundColor3 = Color3.fromRGB(8, 5, 18)
 mainFrame.Visible = false
 mainFrame.Active = true
@@ -95,7 +94,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 15, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // PRODUCTION HUB"
+titleLabel.Text = "❖ VANTA // PURE BLINDED FARM"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
@@ -113,7 +112,7 @@ local scrollContainer = Instance.new("ScrollingFrame")
 scrollContainer.Size = UDim2.new(1, -16, 1, -54)
 scrollContainer.Position = UDim2.new(0, 8, 0, 48)
 scrollContainer.BackgroundTransparency = 1
-scrollContainer.CanvasSize = UDim2.new(0, 0, 0, 480)
+scrollContainer.CanvasSize = UDim2.new(0, 0, 0, 400)
 scrollContainer.ScrollBarThickness = 3
 scrollContainer.Parent = mainFrame
 
@@ -122,14 +121,14 @@ listLayout.Padding = UDim.new(0, 8)
 listLayout.Parent = scrollContainer
 
 -- CONFIGURAÇÃO DE VELOCIDADE
-local userTweenSpeed = 100
+local userTweenSpeed = 90 -- Padrão seguro otimizado contra anti-drop
 
--- TWEEN BLINDADO COM PROTEÇÃO DE ESTADO E RESET GARANTIDO
+-- TWEEN BLINDADO COM PROTEÇÃO DE ESTADO ABSOLUTA
 local isTeleporting = false
 local function ultraBypassTween(targetCFrame, customSpeed)
     if isTeleporting then return end
     
-    local success, err = pcall(function()
+    local success = pcall(function()
         local char = player.Character
         if not char then return end
         local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -191,7 +190,7 @@ local spLabel = Instance.new("TextLabel")
 spLabel.Size = UDim2.new(0.6, 0, 1, 0)
 spLabel.Position = UDim2.new(0, 10, 0, 0)
 spLabel.BackgroundTransparency = 1
-spLabel.Text = "⚡ Velocidade Tween (10-200):"
+spLabel.Text = "⚡ Velocidade Tween (50-150):"
 spLabel.TextColor3 = Color3.fromRGB(230, 200, 255)
 spLabel.Font = Enum.Font.GothamBold
 spLabel.TextSize = 11
@@ -210,7 +209,7 @@ speedInputBox.Parent = speedConfigFrame
 
 speedInputBox.FocusLost:Connect(function()
     local val = tonumber(speedInputBox.Text)
-    if val and val >= 10 and val <= 300 then userTweenSpeed = val else speedInputBox.Text = tostring(userTweenSpeed) end
+    if val and val >= 30 and val <= 200 then userTweenSpeed = val else speedInputBox.Text = tostring(userTweenSpeed) end
 end)
 
 -- UI DE SELEÇÃO DE ESTÁGIO
@@ -302,9 +301,9 @@ setBaseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- AUTO FARM DINÂMICO (PROTEGIDO)
+-- AUTO FARM BLINDADO COM VERIFICAÇÃO DE POSSE DE OVO
 local autoFarmActive = false
-createToggle("🌾 Auto Farm (Roubar + Colocar na Base)", function(s)
+createToggle("🌾 Auto Farm Blindado (Anti-Sumir Ovos)", function(s)
     autoFarmActive = s
 end)
 
@@ -323,12 +322,12 @@ task.spawn(function()
                 end
                 
                 if stagePos and hrp then
-                    -- 1. VAI PARA A FASE
+                    -- 1. VAI PARA A FASE COM TWEEN SEGURO
                     statusBox.Text = "Status: Indo para o Estágio " .. selectedTargetStage .. "..."
                     ultraBypassTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
                     task.wait(0.2)
                     
-                    -- 2. BUSCA OVOS NA FASE
+                    -- 2. BUSCA O PROMPT MAIS PRÓXIMO NA FASE
                     statusBox.Text = "Status: Procurando ovos ativos..."
                     local localNests = Workspace:FindFirstChild("LocalNests")
                     local targetPrompt = nil
@@ -353,32 +352,41 @@ task.spawn(function()
                         end
                     end
                     
-                    -- 3. ROUBA O OVO DO NINHO
+                    -- 3. VAI ATÉ O OVO E TENTA PEGAR COM LOOP DE GARANTIA
                     if targetPrompt and targetPrompt.Parent then
                         local eggPart = targetPrompt.Parent
                         local eggCFrame = eggPart:IsA("BasePart") and eggPart.CFrame or (eggPart:IsA("Model") and eggPart:GetPivot() or nil)
                         
                         if eggCFrame then
-                            statusBox.Text = "Status: Roubando ovo..."
+                            statusBox.Text = "Status: Coletando ovo..."
                             ultraBypassTween(eggCFrame + Vector3.new(0, 2, 0))
                             task.wait(0.1)
                             
-                            fireproximityprompt(targetPrompt)
-                            if actionRemote then 
-                                actionRemote:FireServer("PickUp", eggPart.Name) 
-                                actionRemote:FireServer("StealEgg", eggPart.Name)
+                            -- LOOP DE GARANTIA DE CAPTURA (Firma o ovo na mão antes de voltar)
+                            local attempts = 0
+                            while player:GetAttribute("CarryEgg") ~= true and attempts < 10 and activeConnections and autoFarmActive do
+                                fireproximityprompt(targetPrompt)
+                                if actionRemote then 
+                                    actionRemote:FireServer("PickUp", eggPart.Name) 
+                                    actionRemote:FireServer("StealEgg", eggPart.Name)
+                                end
+                                task.wait(0.25)
+                                attempts = attempts + 1
                             end
-                            task.wait(0.3)
                         end
+                    else
+                        statusBox.Text = "Status: Aguardando respawn de ovos..."
+                        task.wait(0.5)
                     end
                     
-                    -- 4. RETORNA À BASE E DEPOSITA COM SEGURANÇA
+                    -- 4. RETORNA À BASE APENAS SE A SERVIDOR CONFIRMAR O OVO NA MÃO
                     if player:GetAttribute("CarryEgg") == true then
-                        statusBox.Text = "Status: Voltando para a Base..."
-                        ultraBypassTween(baseCFrame, math.min(userTweenSpeed, 85))
-                        task.wait(0.3)
+                        statusBox.Text = "Status: Retornando com o Ovo (Seguro)..."
+                        -- Velocidade reduzida e segura para o retorno (evita anti-drop de física)
+                        ultraBypassTween(baseCFrame, math.min(userTweenSpeed, 75))
+                        task.wait(0.4)
                         
-                        statusBox.Text = "Status: Colocando ovo na Pen..."
+                        statusBox.Text = "Status: Depositando ovo..."
                         for _, desc in ipairs(Workspace:GetDescendants()) do
                             if desc:IsA("ProximityPrompt") then
                                 local pPart = desc.Parent
@@ -397,8 +405,8 @@ task.spawn(function()
                             actionRemote:FireServer("Deposit")
                         end
                         
-                        statusBox.Text = "Status: Ovo Colocado na Base!"
-                        task.wait(0.5)
+                        statusBox.Text = "Status: Ovo Depositado com Sucesso!"
+                        task.wait(0.8)
                     end
                 end
             end)
@@ -406,43 +414,6 @@ task.spawn(function()
             statusBox.Text = "Status: Em repouso."
         end
         task.wait(0.3)
-    end
-end)
-
--- AUTO HATCH BLINDADO (Com trava de raio estrita e estado de transporte)
-local autoHatchActive = false
-createToggle("🐣 Auto Hatch (Chocar Ovos 'PRONTO')", function(s)
-    autoHatchActive = s
-end)
-
-task.spawn(function()
-    while activeConnections do
-        if autoHatchActive and baseCFrame then
-            pcall(function()
-                if player:GetAttribute("CarryEgg") ~= true then
-                    for _, desc in ipairs(Workspace:GetDescendants()) do
-                        if desc:IsA("ProximityPrompt") then
-                            local pPart = desc.Parent
-                            if pPart then
-                                local pPos = pPart:IsA("BasePart") and pPart.Position or (pPart:IsA("Model") and pPart:GetPivot().Position)
-                                if pPos and (baseCFrame.Position - pPos).Magnitude <= 30 then
-                                    fireproximityprompt(desc)
-                                end
-                            end
-                        end
-                    end
-                end
-                
-                if actionRemote then 
-                    actionRemote:FireServer("HatchEgg") 
-                    actionRemote:FireServer("OpenSlot") 
-                end
-                if eggEventRemote then 
-                    eggEventRemote:FireServer("Hatch") 
-                end
-            end)
-        end
-        task.wait(1)
     end
 end)
 
