@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor (Pure Blinded Auto Farm Edition)
--- Target: Swim Adventure (Vanta Ultimate Harvester v9)
+-- Executor: Delta Executor (Ultimate Landing Bypass Edition)
+-- Target: Swim Adventure (Vanta Master Hub v10)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -94,7 +94,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 15, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // PURE BLINDED FARM"
+titleLabel.Text = "❖ VANTA // ULTIMATE BYPASS"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
@@ -121,13 +121,10 @@ listLayout.Padding = UDim.new(0, 8)
 listLayout.Parent = scrollContainer
 
 -- CONFIGURAÇÃO DE VELOCIDADE
-local userTweenSpeed = 90 -- Padrão seguro otimizado contra anti-drop
+local userTweenSpeed = 100
 
--- TWEEN BLINDADO COM PROTEÇÃO DE ESTADO ABSOLUTA
-local isTeleporting = false
-local function ultraBypassTween(targetCFrame, customSpeed)
-    if isTeleporting then return end
-    
+-- TWEEN DE IDA (PADRÃO SEGURO)
+local function standardTween(targetCFrame)
     local success = pcall(function()
         local char = player.Character
         if not char then return end
@@ -135,22 +132,18 @@ local function ultraBypassTween(targetCFrame, customSpeed)
         local humanoid = char:FindFirstChild("Humanoid")
         
         if hrp and humanoid then
-            isTeleporting = true
             humanoid.PlatformStand = true
             humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
             
-            local speed = customSpeed or userTweenSpeed
             local distance = (hrp.Position - targetCFrame.Position).Magnitude
-            local timeTaken = math.clamp(distance / speed, 0.1, 4.0)
-            
+            local timeTaken = math.clamp(distance / userTweenSpeed, 0.1, 4.0)
             local startTime = tick()
             local startCFrame = hrp.CFrame
             
             while tick() - startTime < timeTaken do
                 if not activeConnections then break end
-                local elapsed = tick() - startTime
-                local alpha = elapsed / timeTaken
+                local alpha = (tick() - startTime) / timeTaken
                 local smoothAlpha = 1 - (1 - alpha) * (1 - alpha)
                 
                 hrp.CFrame = startCFrame:Lerp(targetCFrame, smoothAlpha)
@@ -162,21 +155,71 @@ local function ultraBypassTween(targetCFrame, customSpeed)
             hrp.CFrame = targetCFrame
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.08)
-            
+            task.wait(0.05)
             humanoid.PlatformStand = false
-            isTeleporting = false
         end
     end)
-    
     if not success then
-        isTeleporting = false
-        pcall(function()
-            local char = player.Character
-            if char and char:FindFirstChild("Humanoid") then
-                char.Humanoid.PlatformStand = false
+        pcall(function() player.Character.Humanoid.PlatformStand = false end)
+    end
+end
+
+-- TWEEN DE RETORNO COM DESACELERAÇÃO DINÂMICA (ANTI-SUMIR OVO A 150 STUDS DA BASE)
+local function slowLandingTween(targetCFrame)
+    local success = pcall(function()
+        local char = player.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local humanoid = char:FindFirstChild("Humanoid")
+        
+        if hrp and humanoid then
+            humanoid.PlatformStand = true
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, false)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+            
+            while activeConnections and (hrp.Position - targetCFrame.Position).Magnitude > 3 do
+                local distToTarget = (hrp.Position - targetCFrame.Position).Magnitude
+                
+                -- SE ESTIVER A MENOS DE 150 STUDS DA BASE, DESACELERA GRADATIVAMENTE ATÉ 25 STUDS/S
+                local currentSpeed = userTweenSpeed
+                if distToTarget <= 150 then
+                    currentSpeed = math.clamp(distToTarget * 0.35, 22, userTweenSpeed)
+                end
+                
+                local step = currentSpeed * RunService.RenderStepped:Wait()
+                if distToTarget <= step then
+                    hrp.CFrame = targetCFrame
+                    break
+                else
+                    local direction = (targetCFrame.Position - hrp.Position).Unit
+                    hrp.CFrame = CFrame.new(hrp.Position + direction * step, targetCFrame.Position)
+                end
+                
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                hrp.AssemblyAngularVelocity = Vector3.zero
+                
+                -- Trava de segurança: se o ovo sumir no meio do voo, cancela o retorno
+                if player:GetAttribute("CarryEgg") ~= true then
+                    break
+                end
             end
-        end)
+            
+            hrp.CFrame = targetCFrame
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            task.wait(0.1)
+            
+            humanoid.PlatformStand = false
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, true)
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+        end
+    end)
+    if not success then
+        pcall(function() player.Character.Humanoid.PlatformStand = false end)
     end
 end
 
@@ -301,9 +344,9 @@ setBaseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- AUTO FARM BLINDADO COM VERIFICAÇÃO DE POSSE DE OVO
+-- AUTO FARM COM SLOW-LANDING BYPASS
 local autoFarmActive = false
-createToggle("🌾 Auto Farm Blindado (Anti-Sumir Ovos)", function(s)
+createToggle("🌾 Auto Farm (Slow-Landing Bypass)", function(s)
     autoFarmActive = s
 end)
 
@@ -322,12 +365,12 @@ task.spawn(function()
                 end
                 
                 if stagePos and hrp then
-                    -- 1. VAI PARA A FASE COM TWEEN SEGURO
+                    -- 1. VAI PARA A FASE
                     statusBox.Text = "Status: Indo para o Estágio " .. selectedTargetStage .. "..."
-                    ultraBypassTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
+                    standardTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
                     task.wait(0.2)
                     
-                    -- 2. BUSCA O PROMPT MAIS PRÓXIMO NA FASE
+                    -- 2. BUSCA O OVO NA FASE
                     statusBox.Text = "Status: Procurando ovos ativos..."
                     local localNests = Workspace:FindFirstChild("LocalNests")
                     local targetPrompt = nil
@@ -352,17 +395,16 @@ task.spawn(function()
                         end
                     end
                     
-                    -- 3. VAI ATÉ O OVO E TENTA PEGAR COM LOOP DE GARANTIA
+                    -- 3. ROUBA O OVO COM LOOP DE GARANTIA
                     if targetPrompt and targetPrompt.Parent then
                         local eggPart = targetPrompt.Parent
                         local eggCFrame = eggPart:IsA("BasePart") and eggPart.CFrame or (eggPart:IsA("Model") and eggPart:GetPivot() or nil)
                         
                         if eggCFrame then
                             statusBox.Text = "Status: Coletando ovo..."
-                            ultraBypassTween(eggCFrame + Vector3.new(0, 2, 0))
+                            standardTween(eggCFrame + Vector3.new(0, 2, 0))
                             task.wait(0.1)
                             
-                            -- LOOP DE GARANTIA DE CAPTURA (Firma o ovo na mão antes de voltar)
                             local attempts = 0
                             while player:GetAttribute("CarryEgg") ~= true and attempts < 10 and activeConnections and autoFarmActive do
                                 fireproximityprompt(targetPrompt)
@@ -379,12 +421,11 @@ task.spawn(function()
                         task.wait(0.5)
                     end
                     
-                    -- 4. RETORNA À BASE APENAS SE A SERVIDOR CONFIRMAR O OVO NA MÃO
+                    -- 4. RETORNA COM O SLOW-LANDING BYPASS (DESACELERA A 150 STUDS DA BASE)
                     if player:GetAttribute("CarryEgg") == true then
-                        statusBox.Text = "Status: Retornando com o Ovo (Seguro)..."
-                        -- Velocidade reduzida e segura para o retorno (evita anti-drop de física)
-                        ultraBypassTween(baseCFrame, math.min(userTweenSpeed, 75))
-                        task.wait(0.4)
+                        statusBox.Text = "Status: Retornando (Pouso Lento)..."
+                        slowLandingTween(baseCFrame)
+                        task.wait(0.3)
                         
                         statusBox.Text = "Status: Depositando ovo..."
                         for _, desc in ipairs(Workspace:GetDescendants()) do
@@ -405,7 +446,7 @@ task.spawn(function()
                             actionRemote:FireServer("Deposit")
                         end
                         
-                        statusBox.Text = "Status: Ovo Depositado com Sucesso!"
+                        statusBox.Text = "Status: Ovo Depositado!"
                         task.wait(0.8)
                     end
                 end
@@ -417,7 +458,7 @@ task.spawn(function()
     end
 end)
 
--- AUTO CLICKER OTIMIZADO
+-- AUTO CLICKER
 local autoClickActive = false
 createToggle("⚡ Auto Click (Ganhar Força)", function(s) autoClickActive = s end)
 
