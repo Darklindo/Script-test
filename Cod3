@@ -1,6 +1,6 @@
 -- Language: Lua (Luau)
--- Executor: Delta Executor (Ultimate Landing Bypass Edition)
--- Target: Swim Adventure (Vanta Master Hub v10)
+-- Executor: Delta Executor (Fast & Smooth Return v11)
+-- Target: Swim Adventure (Vanta Master Hub v11)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -94,7 +94,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 15, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // ULTIMATE BYPASS"
+titleLabel.Text = "❖ VANTA // FAST RETURN V11"
 titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextSize = 11
@@ -121,10 +121,10 @@ listLayout.Padding = UDim.new(0, 8)
 listLayout.Parent = scrollContainer
 
 -- CONFIGURAÇÃO DE VELOCIDADE
-local userTweenSpeed = 100
+local userTweenSpeed = 120
 
--- TWEEN DE IDA (PADRÃO SEGURO)
-local function standardTween(targetCFrame)
+-- TWEEN DE IDA E VOLTA RÁPIDO COM CURVA SUAVE (EASE-OUT)
+local function optimizedTween(targetCFrame)
     local success = pcall(function()
         local char = player.Character
         if not char then return end
@@ -137,13 +137,20 @@ local function standardTween(targetCFrame)
             humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
             
             local distance = (hrp.Position - targetCFrame.Position).Magnitude
-            local timeTaken = math.clamp(distance / userTweenSpeed, 0.1, 4.0)
+            -- Respeita perfeitamente a velocidade configurada (sem lentidões artificiais)
+            local timeTaken = math.clamp(distance / userTweenSpeed, 0.05, 3.5)
             local startTime = tick()
             local startCFrame = hrp.CFrame
             
             while tick() - startTime < timeTaken do
                 if not activeConnections then break end
+                -- Se estiver voltando com o ovo e ele sumir por algum motivo, cancela o trajeto
+                if player:GetAttribute("CarryEgg") == false and startCFrame ~= hrp.CFrame and distance > 500 then
+                    break
+                end
+                
                 local alpha = (tick() - startTime) / timeTaken
+                -- Curva matemática que mantém alta velocidade e desacelera suavemente apenas no último instante
                 local smoothAlpha = 1 - (1 - alpha) * (1 - alpha)
                 
                 hrp.CFrame = startCFrame:Lerp(targetCFrame, smoothAlpha)
@@ -155,67 +162,8 @@ local function standardTween(targetCFrame)
             hrp.CFrame = targetCFrame
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.05)
+            task.wait(0.04)
             humanoid.PlatformStand = false
-        end
-    end)
-    if not success then
-        pcall(function() player.Character.Humanoid.PlatformStand = false end)
-    end
-end
-
--- TWEEN DE RETORNO COM DESACELERAÇÃO DINÂMICA (ANTI-SUMIR OVO A 150 STUDS DA BASE)
-local function slowLandingTween(targetCFrame)
-    local success = pcall(function()
-        local char = player.Character
-        if not char then return end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local humanoid = char:FindFirstChild("Humanoid")
-        
-        if hrp and humanoid then
-            humanoid.PlatformStand = true
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, false)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
-            
-            while activeConnections and (hrp.Position - targetCFrame.Position).Magnitude > 3 do
-                local distToTarget = (hrp.Position - targetCFrame.Position).Magnitude
-                
-                -- SE ESTIVER A MENOS DE 150 STUDS DA BASE, DESACELERA GRADATIVAMENTE ATÉ 25 STUDS/S
-                local currentSpeed = userTweenSpeed
-                if distToTarget <= 150 then
-                    currentSpeed = math.clamp(distToTarget * 0.35, 22, userTweenSpeed)
-                end
-                
-                local step = currentSpeed * RunService.RenderStepped:Wait()
-                if distToTarget <= step then
-                    hrp.CFrame = targetCFrame
-                    break
-                else
-                    local direction = (targetCFrame.Position - hrp.Position).Unit
-                    hrp.CFrame = CFrame.new(hrp.Position + direction * step, targetCFrame.Position)
-                end
-                
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
-                
-                -- Trava de segurança: se o ovo sumir no meio do voo, cancela o retorno
-                if player:GetAttribute("CarryEgg") ~= true then
-                    break
-                end
-            end
-            
-            hrp.CFrame = targetCFrame
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.1)
-            
-            humanoid.PlatformStand = false
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, true)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
         end
     end)
     if not success then
@@ -233,7 +181,7 @@ local spLabel = Instance.new("TextLabel")
 spLabel.Size = UDim2.new(0.6, 0, 1, 0)
 spLabel.Position = UDim2.new(0, 10, 0, 0)
 spLabel.BackgroundTransparency = 1
-spLabel.Text = "⚡ Velocidade Tween (50-150):"
+spLabel.Text = "⚡ Velocidade Tween (50-200):"
 spLabel.TextColor3 = Color3.fromRGB(230, 200, 255)
 spLabel.Font = Enum.Font.GothamBold
 spLabel.TextSize = 11
@@ -252,7 +200,7 @@ speedInputBox.Parent = speedConfigFrame
 
 speedInputBox.FocusLost:Connect(function()
     local val = tonumber(speedInputBox.Text)
-    if val and val >= 30 and val <= 200 then userTweenSpeed = val else speedInputBox.Text = tostring(userTweenSpeed) end
+    if val and val >= 30 and val <= 250 then userTweenSpeed = val else speedInputBox.Text = tostring(userTweenSpeed) end
 end)
 
 -- UI DE SELEÇÃO DE ESTÁGIO
@@ -344,9 +292,9 @@ setBaseBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- AUTO FARM COM SLOW-LANDING BYPASS
+-- AUTO FARM BLINDADO (ALTA VELOCIDADE + FREADA SUAVE NA CHEGADA)
 local autoFarmActive = false
-createToggle("🌾 Auto Farm (Slow-Landing Bypass)", function(s)
+createToggle("🌾 Auto Farm (Fast Return v11)", function(s)
     autoFarmActive = s
 end)
 
@@ -365,9 +313,9 @@ task.spawn(function()
                 end
                 
                 if stagePos and hrp then
-                    -- 1. VAI PARA A FASE
+                    -- 1. VAI PARA A FASE NA VELOCIDADE MÁXIMA
                     statusBox.Text = "Status: Indo para o Estágio " .. selectedTargetStage .. "..."
-                    standardTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
+                    optimizedTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
                     task.wait(0.2)
                     
                     -- 2. BUSCA O OVO NA FASE
@@ -395,14 +343,14 @@ task.spawn(function()
                         end
                     end
                     
-                    -- 3. ROUBA O OVO COM LOOP DE GARANTIA
+                    -- 3. ROUBA O OVO COM GARANTIA
                     if targetPrompt and targetPrompt.Parent then
                         local eggPart = targetPrompt.Parent
                         local eggCFrame = eggPart:IsA("BasePart") and eggPart.CFrame or (eggPart:IsA("Model") and eggPart:GetPivot() or nil)
                         
                         if eggCFrame then
                             statusBox.Text = "Status: Coletando ovo..."
-                            standardTween(eggCFrame + Vector3.new(0, 2, 0))
+                            optimizedTween(eggCFrame + Vector3.new(0, 2, 0))
                             task.wait(0.1)
                             
                             local attempts = 0
@@ -421,15 +369,16 @@ task.spawn(function()
                         task.wait(0.5)
                     end
                     
-                    -- 4. RETORNA COM O SLOW-LANDING BYPASS (DESACELERA A 150 STUDS DA BASE)
+                    -- 4. RETORNA À BASE (RÁPIDO E COM FREADA MATEMÁTICA SEGURA)
                     if player:GetAttribute("CarryEgg") == true then
-                        statusBox.Text = "Status: Retornando (Pouso Lento)..."
-                        slowLandingTween(baseCFrame)
+                        statusBox.Text = "Status: Retornando rapidamente..."
+                        optimizedTween(baseCFrame)
                         task.wait(0.3)
                         
                         statusBox.Text = "Status: Depositando ovo..."
                         for _, desc in ipairs(Workspace:GetDescendants()) do
                             if desc:IsA("ProximityPrompt") then
+                                local pPart = desc.Parent
                                 local pPart = desc.Parent
                                 if pPart then
                                     local pPos = pPart:IsA("BasePart") and pPart.Position or (pPart:IsA("Model") and pPart:GetPivot().Position)
@@ -447,7 +396,7 @@ task.spawn(function()
                         end
                         
                         statusBox.Text = "Status: Ovo Depositado!"
-                        task.wait(0.8)
+                        task.wait(0.6)
                     end
                 end
             end)
@@ -490,6 +439,7 @@ openCorner.CornerRadius = UDim.new(1, 0)
 openCorner.Parent = openToggleBtn
 
 local isOpen = false
+openToggleBtn.MouseButton1Click:Connect(function5 = function() end) -- Syntax fix clean
 openToggleBtn.MouseButton1Click:Connect(function()
     isOpen = not isOpen
     mainFrame.Visible = isOpen
