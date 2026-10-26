@@ -1,443 +1,1486 @@
--- Language: Lua (Luau)
--- Executor: Delta Executor (V15 Master Definitive Edition)
--- Target: Swim Adventure (Vanta Master Hub v15)
+-- 🃏 ANIME CARD FARM - Starter v1.1 (diagnóstico)
+-- PlaceId esperado: 125039473548047
+-- Esta primeira versão NÃO automatiza nada: ela coleta os dados do jogo
+-- (remotes, módulos de configuração, interface) para eu montar o auto farm certo.
+-- Passo a passo: 1) rode o Scanner  2) rode o Gravador e faça as ações à mão
+-- (abrir pack, melhorar carta, comprar pack, etc.)  3) cole os dois resultados no chat.
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Workspace = game:GetService("Workspace")
+local EXPECTED_PLACE = 125039473548047
 
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
-
--- 1. SISTEMA DE SEGURANÇA CONTRA DUPLICAÇÃO DE THREADS
-if getgenv().VantaFarmConnection then
-    pcall(function() getgenv().VantaFarmConnection() end)
+local G = getgenv and getgenv() or _G
+if G.ACFRayfield then
+    pcall(function() G.ACFRayfield:Destroy() end)
 end
 
-local activeConnections = true
-getgenv().VantaFarmConnection = function()
-    activeConnections = false
+local function Say(title, text)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 5,
+        })
+    end)
 end
 
--- Remotes Seguros com Verificação de Nulo
-local remotesFolder = nil
-pcall(function()
-    remotesFolder = ReplicatedStorage:WaitForChild("SwimAdventure", 5):WaitForChild("Remotes", 5)
-end)
-local clickRemote = remotesFolder and remotesFolder:FindFirstChild("Click")
-local actionRemote = remotesFolder and remotesFolder:FindFirstChild("Action")
-
--- MAPA DE COORDENADAS EXATAS (TRAIL 1)
-local STAGE_MAP_TRAIL1 = {
-    [1]  = Vector3.new(-6.6, 27.7, 482.9),
-    [2]  = Vector3.new(-6.6, 37.6, 365.0),
-    [3]  = Vector3.new(-6.4, 49.6, 247.8),
-    [4]  = Vector3.new(-0.1, 63.6, 128.8),
-    [5]  = Vector3.new(-2.8, 79.6, -0.9),
-    [6]  = Vector3.new(-2.3, 97.6, -124.7),
-    [7]  = Vector3.new(-2.9, 117.6, -254.1),
-    [8]  = Vector3.new(1.5, 139.6, -380.8),
-    [9]  = Vector3.new(-1.6, 163.6, -516.6),
-    [10] = Vector3.new(-0.4, 189.6, -669.3),
-    [11] = Vector3.new(-2.1, 217.6, -798.5),
-    [12] = Vector3.new(-1.9, 247.6, -960.6),
-    [13] = Vector3.new(1.0, 279.1, -1112.7),
-    [14] = Vector3.new(4.4, 312.1, -1275.8),
-    [15] = Vector3.new(2.5, 346.6, -1418.7),
-    [16] = Vector3.new(-5.3, 382.6, -1580.6),
-    [17] = Vector3.new(-0.6, 420.1, -1736.2),
-    [18] = Vector3.new(-5.0, 459.1, -1924.4),
-    [19] = Vector3.new(1.3, 499.6, -2060.5),
-    [20] = Vector3.new(4.3, 541.6, -2253.1),
-    [21] = Vector3.new(-3.7, 585.1, -2449.1),
-    [22] = Vector3.new(1.3, 630.1, -2609.9),
-    [23] = Vector3.new(-3.3, 724.6, -3009.7)
-}
-
--- LIMPEZA DE UI ANTERIOR
-for _, gui in ipairs(playerGui:GetChildren()) do
-    if gui.Name == "VantaMasterConstellationUI" then gui:Destroy() end
-end
-
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "VantaMasterConstellationUI"
-screenGui.ResetOnSpawn = false
-screenGui.DisplayOrder = 9999
-screenGui.Parent = playerGui
-
-local mainFrame = Instance.new("Frame")
-mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 360, 0, 380)
-mainFrame.Position = UDim2.new(0.5, -180, 0.5, -190)
-mainFrame.BackgroundColor3 = Color3.fromRGB(8, 5, 18)
-mainFrame.Visible = false
-mainFrame.Active = true
-mainFrame.Draggable = true
-mainFrame.Parent = screenGui
-
-local mainCorner = Instance.new("UICorner")
-mainCorner.CornerRadius = UDim.new(0, 16)
-mainCorner.Parent = mainFrame
-
-local mainStroke = Instance.new("UIStroke")
-mainStroke.Color = Color3.fromRGB(170, 70, 255)
-mainStroke.Thickness = 2
-mainStroke.Parent = mainFrame
-
-local topBar = Instance.new("Frame")
-topBar.Size = UDim2.new(1, 0, 0, 44)
-topBar.BackgroundColor3 = Color3.fromRGB(15, 10, 30)
-topBar.Parent = mainFrame
-
-local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, -50, 1, 0)
-titleLabel.Position = UDim2.new(0, 15, 0, 0)
-titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "❖ VANTA // V15 MASTER EDITION"
-titleLabel.TextColor3 = Color3.fromRGB(220, 170, 255)
-titleLabel.Font = Enum.Font.GothamBold
-titleLabel.TextSize = 11
-titleLabel.Parent = topBar
-
-local closeButton = Instance.new("TextButton")
-closeButton.Size = UDim2.new(0, 30, 0, 30)
-closeButton.Position = UDim2.new(1, -36, 0, 7)
-closeButton.BackgroundColor3 = Color3.fromRGB(50, 20, 80)
-closeButton.TextColor3 = Color3.fromRGB(220, 170, 255)
-closeButton.Text = "✕"
-closeButton.Parent = topBar
-
-local scrollContainer = Instance.new("ScrollingFrame")
-scrollContainer.Size = UDim2.new(1, -16, 1, -54)
-scrollContainer.Position = UDim2.new(0, 8, 0, 48)
-scrollContainer.BackgroundTransparency = 1
-scrollContainer.CanvasSize = UDim2.new(0, 0, 0, 400)
-scrollContainer.ScrollBarThickness = 3
-scrollContainer.Parent = mainFrame
-
-local listLayout = Instance.new("UIListLayout")
-listLayout.Padding = UDim.new(0, 8)
-listLayout.Parent = scrollContainer
-
--- CONFIGURAÇÃO DE VELOCIDADE
-local userTweenSpeed = 120
-
--- MOTOR DE TWEEN SUPREMO (PROPORCIONAL E BLINDADO)
-local function masterTween(targetCFrame)
-    local success = pcall(function()
-        local char = player.Character
-        if not char then return end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        local humanoid = char:FindFirstChild("Humanoid")
-        
-        if hrp and humanoid then
-            humanoid.PlatformStand = true
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-            
-            local distance = (hrp.Position - targetCFrame.Position).Magnitude
-            local timeTaken = math.max(0.05, distance / userTweenSpeed)
-            local startTime = tick()
-            local startCFrame = hrp.CFrame
-            
-            while tick() - startTime < timeTaken do
-                if not activeConnections then break end
-                
-                local alpha = (tick() - startTime) / timeTaken
-                local smoothAlpha = 1 - (1 - alpha) * (1 - alpha)
-                
-                hrp.CFrame = startCFrame:Lerp(targetCFrame, smoothAlpha)
-                hrp.AssemblyLinearVelocity = Vector3.zero
-                hrp.AssemblyAngularVelocity = Vector3.zero
-                RunService.RenderStepped:Wait()
-            end
-            
-            hrp.CFrame = targetCFrame
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-            task.wait(0.04)
-            humanoid.PlatformStand = false
+-- ============================================
+-- GRAVADOR DE REMOTES
+--   C>S = chamadas FireServer/InvokeServer (precisa de hookmetamethod)
+--   S>C = o que o servidor manda para o cliente
+-- ============================================
+local function serial(v, depth)
+    local t = typeof(v)
+    if t == "string" then
+        return '"' .. v:sub(1, 40) .. '"'
+    elseif t == "number" or t == "boolean" or t == "nil" then
+        return tostring(v)
+    elseif t == "Instance" then
+        local ok, p = pcall(function() return v:GetFullName() end)
+        return "<" .. (ok and p or v.Name) .. ">"
+    elseif t == "table" then
+        if depth >= 2 then
+            return "{...}"
         end
-    end)
-    if not success then
-        pcall(function() player.Character.Humanoid.PlatformStand = false end)
+        local parts, n = {}, 0
+        for k, val in pairs(v) do
+            n = n + 1
+            if n > 10 then
+                parts[#parts + 1] = "..."
+                break
+            end
+            parts[#parts + 1] = tostring(k) .. "=" .. serial(val, depth + 1)
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
     end
+    return t .. ":" .. tostring(v)
 end
 
--- UI DE CONFIGURAÇÃO DE VELOCIDADE
-local speedConfigFrame = Instance.new("Frame")
-speedConfigFrame.Size = UDim2.new(1, -6, 0, 40)
-speedConfigFrame.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
-speedConfigFrame.Parent = scrollContainer
-
-local spLabel = Instance.new("TextLabel")
-spLabel.Size = UDim2.new(0.6, 0, 1, 0)
-spLabel.Position = UDim2.new(0, 10, 0, 0)
-spLabel.BackgroundTransparency = 1
-spLabel.Text = "⚡ Velocidade Tween (50-300):"
-spLabel.TextColor3 = Color3.fromRGB(230, 200, 255)
-spLabel.Font = Enum.Font.GothamBold
-spLabel.TextSize = 11
-spLabel.Parent = speedConfigFrame
-
-local speedInputBox = Instance.new("TextBox")
-speedInputBox.Size = UDim2.new(0, 65, 0, 26)
-speedInputBox.Position = UDim2.new(1, -75, 0.5, -13)
-speedInputBox.BackgroundColor3 = Color3.fromRGB(35, 20, 65)
-speedInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-speedInputBox.Text = tostring(userTweenSpeed)
-speedInputBox.Font = Enum.Font.GothamBold
-speedInputBox.TextSize = 12
-speedInputBox.ClearTextOnFocus = false
-speedInputBox.Parent = speedConfigFrame
-
-speedInputBox.FocusLost:Connect(function()
-    local val = tonumber(speedInputBox.Text)
-    if val and val >= 30 and val <= 400 then userTweenSpeed = val else speedInputBox.Text = tostring(userTweenSpeed) end
-end)
-
--- UI DE SELEÇÃO DE ESTÁGIO
-local selectedTargetStage = 1
-local stageConfigFrame = Instance.new("Frame")
-stageConfigFrame.Size = UDim2.new(1, -6, 0, 40)
-stageConfigFrame.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
-stageConfigFrame.Parent = scrollContainer
-
-local scLabel = Instance.new("TextLabel")
-scLabel.Size = UDim2.new(0.6, 0, 1, 0)
-scLabel.Position = UDim2.new(0, 10, 0, 0)
-scLabel.BackgroundTransparency = 1
-scLabel.Text = "🎯 Estágio Alvo (1-23):"
-scLabel.TextColor3 = Color3.fromRGB(230, 200, 255)
-scLabel.Font = Enum.Font.GothamBold
-scLabel.TextSize = 11
-scLabel.Parent = stageConfigFrame
-
-local stageInputBox = Instance.new("TextBox")
-stageInputBox.Size = UDim2.new(0, 65, 0, 26)
-stageInputBox.Position = UDim2.new(1, -75, 0.5, -13)
-stageInputBox.BackgroundColor3 = Color3.fromRGB(35, 20, 65)
-stageInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-stageInputBox.Text = "1"
-stageInputBox.Font = Enum.Font.GothamBold
-stageInputBox.TextSize = 12
-stageInputBox.ClearTextOnFocus = false
-stageInputBox.Parent = stageConfigFrame
-
-stageInputBox.FocusLost:Connect(function()
-    local val = tonumber(stageInputBox.Text)
-    if val and STAGE_MAP_TRAIL1[val] then selectedTargetStage = val else stageInputBox.Text = tostring(selectedTargetStage) end
-end)
-
--- STATUS BOX
-local statusBox = Instance.new("TextLabel")
-statusBox.Size = UDim2.new(1, -6, 0, 30)
-statusBox.BackgroundColor3 = Color3.fromRGB(25, 15, 45)
-statusBox.TextColor3 = Color3.fromRGB(150, 255, 150)
-statusBox.Text = "Status: Pronto para iniciar."
-statusBox.Font = Enum.Font.GothamMedium
-statusBox.TextSize = 10
-statusBox.Parent = scrollContainer
-
-local function createToggle(text, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -6, 0, 38)
-    btn.BackgroundColor3 = Color3.fromRGB(20, 12, 38)
-    btn.TextColor3 = Color3.fromRGB(230, 200, 255)
-    btn.Text = "   " .. text
-    btn.Font = Enum.Font.GothamMedium
-    btn.TextSize = 11
-    btn.TextXAlignment = Enum.TextXAlignment.Left
-    btn.Parent = scrollContainer
-    
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 8)
-    btnCorner.Parent = btn
-    
-    local active = false
-    btn.MouseButton1Click:Connect(function()
-        active = not active
-        btn.BackgroundColor3 = active and Color3.fromRGB(110, 40, 200) or Color3.fromRGB(20, 12, 38)
-        callback(active)
-    end)
-    return btn
+-- Caminho do remote lendo só PROPRIEDADES. Chamar métodos (GetFullName etc.)
+-- dentro do hook troca o método "FireServer" e a chamada nunca chega ao servidor.
+local function remotePath(inst)
+    local parts, cur, guard = {}, inst, 0
+    while cur and cur ~= game and guard < 12 do
+        table.insert(parts, 1, cur.Name)
+        cur = cur.Parent
+        guard = guard + 1
+    end
+    return (table.concat(parts, "."):gsub("^ReplicatedStorage%.Remotes%.", ""))
 end
 
--- DEFINIR BASE
-local baseCFrame = nil
-local setBaseBtn = Instance.new("TextButton")
-setBaseBtn.Size = UDim2.new(1, -6, 0, 36)
-setBaseBtn.BackgroundColor3 = Color3.fromRGB(45, 20, 80)
-setBaseBtn.TextColor3 = Color3.fromRGB(255, 220, 100)
-setBaseBtn.Text = "🏠 Definir Minha Base (Fique Nela e Clique)"
-setBaseBtn.Font = Enum.Font.GothamBold
-setBaseBtn.TextSize = 11
-setBaseBtn.Parent = scrollContainer
-
-setBaseBtn.MouseButton1Click:Connect(function()
-    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-        baseCFrame = player.Character.HumanoidRootPart.CFrame
-        setBaseBtn.Text = "✓ Base Cadastrada com Sucesso!"
-        setBaseBtn.BackgroundColor3 = Color3.fromRGB(40, 150, 80)
-        task.wait(1.5)
-        setBaseBtn.Text = "🏠 Redefinir Posição da Base"
-        setBaseBtn.BackgroundColor3 = Color3.fromRGB(45, 20, 80)
+local function ensureHook()
+    if not (hookmetamethod and getnamecallmethod) then
+        return false, "Executor sem hookmetamethod/getnamecallmethod."
     end
-end)
+    local G = getgenv and getgenv() or _G
+    G.ACFHookListeners = G.ACFHookListeners or {}
+    if G.ACFHook then
+        return true
+    end
+    G.ACFHook = true
 
--- AUTO FARM V15 MASTER (BLINDADO E PERFEITO)
-local autoFarmActive = false
-createToggle("🌾 Auto Farm (V15 Master Edition)", function(s)
-    autoFarmActive = s
-end)
-
-task.spawn(function()
-    while activeConnections do
-        if autoFarmActive then
-            pcall(function()
-                local stagePos = STAGE_MAP_TRAIL1[selectedTargetStage]
-                local char = player.Character
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                
-                if not baseCFrame then
-                    statusBox.Text = "Status: Defina sua Base primeiro!"
-                    task.wait(1)
-                    return
+    local old
+    local function handler(self, ...)
+        local rec = G.ACFHookRec
+        local ls = G.ACFHookListeners
+        if (rec and rec.active) or (ls and next(ls) ~= nil) then
+            local m = getnamecallmethod()
+            if (m == "FireServer" or m == "InvokeServer") and typeof(self) == "Instance" then
+                local cn = self.ClassName
+                if cn == "RemoteEvent" or cn == "RemoteFunction" then
+                    local args = table.pack(...)
+                    local name = remotePath(self)
+                    task.defer(function()
+                        if rec and rec.active then
+                            pcall(rec.record, "C>S", name, args)
+                        end
+                        if ls then
+                            for _, fn in pairs(ls) do
+                                pcall(fn, name, args)
+                            end
+                        end
+                    end)
                 end
-                
-                if stagePos and hrp then
-                    -- 1. VAI PARA A FASE
-                    statusBox.Text = "Status: Indo para o Estágio " .. selectedTargetStage .. "..."
-                    masterTween(CFrame.new(stagePos + Vector3.new(0, 3, 0)))
-                    task.wait(0.15)
-                    
-                    -- 2. BUSCA O OVO NA FASE
-                    statusBox.Text = "Status: Procurando ovos ativos..."
-                    local localNests = Workspace:FindFirstChild("LocalNests")
-                    local targetPrompt = nil
-                    local minPromptDist = math.huge
-                    
-                    if localNests then
-                        for _, desc in ipairs(localNests:GetDescendants()) do
-                            if desc:IsA("ProximityPrompt") then
-                                local promptPart = desc.Parent
-                                local pPos = promptPart and (promptPart:IsA("BasePart") and promptPart.Position or (promptPart:IsA("Model") and promptPart.PrimaryPart and promptPart.PrimaryPart.Position))
-                                if pPos then
-                                    local distToStage = (stagePos - pPos).Magnitude
-                                    if distToStage <= 120 then
-                                        local distToPlayer = (hrp.Position - pPos).Magnitude
-                                        if distToPlayer < minPromptDist then
-                                            minPromptDist = distToPlayer
-                                            targetPrompt = desc
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                    
-                    -- 3. ROUBA O OVO COM GARANTIA
-                    if targetPrompt and targetPrompt.Parent then
-                        local eggPart = targetPrompt.Parent
-                        local eggCFrame = eggPart:IsA("BasePart") and eggPart.CFrame or (eggPart:IsA("Model") and eggPart:GetPivot() or nil)
-                        
-                        if eggCFrame then
-                            statusBox.Text = "Status: Coletando ovo..."
-                            masterTween(eggCFrame + Vector3.new(0, 2, 0))
-                            task.wait(0.1)
-                            
-                            local attempts = 0
-                            while player:GetAttribute("CarryEgg") ~= true and attempts < 12 and activeConnections and autoFarmActive do
-                                fireproximityprompt(targetPrompt)
-                                if actionRemote then 
-                                    actionRemote:FireServer("PickUp", eggPart.Name) 
-                                    actionRemote:FireServer("StealEgg", eggPart.Name)
-                                end
-                                task.wait(0.2)
-                                attempts = attempts + 1
-                            end
-                        end
-                    else
-                        statusBox.Text = "Status: Aguardando respawn de ovos..."
-                        task.wait(0.4)
-                    end
-                    
-                    -- 4. RETORNA PARA A BASE COM ESTABILIDADE MÁXIMA
-                    if player:GetAttribute("CarryEgg") == true then
-                        statusBox.Text = "Status: Retornando para a Base..."
-                        masterTween(baseCFrame)
-                        task.wait(0.2)
-                        
-                        statusBox.Text = "Status: Depositando ovo..."
-                        for _, desc in ipairs(Workspace:GetDescendants()) do
-                            if desc:IsA("ProximityPrompt") then
-                                local pPart = desc.Parent
-                                if pPart then
-                                    local pPos = pPart:IsA("BasePart") and pPart.Position or (pPart:IsA("Model") and pPart:GetPivot().Position)
-                                    if pPos and (hrp.Position - pPos).Magnitude <= 35 then
-                                        fireproximityprompt(desc)
-                                    end
-                                end
-                            end
-                        end
-                        
-                        if actionRemote then
-                            actionRemote:FireServer("PlaceEgg")
-                            actionRemote:FireServer("StoreEgg")
-                            actionRemote:FireServer("Deposit")
-                        end
-                        
-                        statusBox.Text = "Status: Ovo Depositado com Sucesso!"
-                        task.wait(0.5)
-                    end
+            end
+            if m and setnamecallmethod then
+                setnamecallmethod(m)
+            end
+        end
+        return old(self, ...)
+    end
+
+    local okHook, res = pcall(function()
+        return hookmetamethod(game, "__namecall", newcclosure and newcclosure(handler) or handler)
+    end)
+    if not okHook then
+        G.ACFHook = nil
+        return false, "Falha ao instalar o hook: " .. tostring(res)
+    end
+    old = res
+    return true
+end
+
+
+local function RemoteLog(seconds)
+    local RS = game:GetService("ReplicatedStorage")
+    local state = { active = true, data = {}, order = {} }
+    function state.record(dir, name, args)
+        local key = dir .. " " .. name
+        local rec = state.data[key]
+        if not rec then
+            if #state.order >= 120 then
+                return
+            end
+            rec = { count = 0, samples = {}, seen = {} }
+            state.data[key] = rec
+            state.order[#state.order + 1] = key
+        end
+        rec.count = rec.count + 1
+        if #rec.samples < 3 then
+            local parts = {}
+            for i = 1, args.n do
+                parts[i] = serial(args[i], 0)
+            end
+            local text = "(" .. table.concat(parts, ", ") .. ")"
+            if not rec.seen[text] then
+                rec.seen[text] = true
+                rec.samples[#rec.samples + 1] = text
+            end
+        end
+    end
+    G.ACFHookRec = state
+
+    -- servidor -> cliente: escuta passiva de TODOS os RemoteEvents do ReplicatedStorage
+    local conns = {}
+    local n = 0
+    for _, d in ipairs(RS:GetDescendants()) do
+        if d:IsA("RemoteEvent") or d.ClassName == "UnreliableRemoteEvent" then
+            n = n + 1
+            if n > 250 then
+                break
+            end
+            local label = remotePath(d)
+            conns[#conns + 1] = d.OnClientEvent:Connect(function(...)
+                if state.active then
+                    state.record("S>C", label, table.pack(...))
                 end
             end)
+        end
+    end
+
+    local okHook, hookNote = ensureHook()
+    Say("Gravando remotes", "Faça as ações à mão por " .. seconds .. "s")
+    task.wait(seconds)
+
+    state.active = false
+    for _, c in ipairs(conns) do
+        pcall(function() c:Disconnect() end)
+    end
+    local lines = { "=== REMOTES GRAVADOS (" .. seconds .. "s) | PlaceId " .. tostring(game.PlaceId) .. " ===" }
+    if not okHook then
+        lines[#lines + 1] = tostring(hookNote) .. " Só aparecem as chamadas servidor>cliente (S>C)."
+    end
+    for _, key in ipairs(state.order) do
+        local rec = state.data[key]
+        lines[#lines + 1] = key .. " x" .. rec.count .. "  " .. table.concat(rec.samples, " | ")
+    end
+    if #state.order == 0 then
+        lines[#lines + 1] = "Nada foi gravado."
+    end
+    lines[#lines + 1] = "=== FIM ==="
+    return table.concat(lines, "\n")
+end
+
+-- ============================================
+-- SCANNER GENÉRICO
+-- ============================================
+local function ScanGame()
+    local Players = game:GetService("Players")
+    local RS = game:GetService("ReplicatedStorage")
+    local lp = Players.LocalPlayer
+    local out = {}
+    local function add(line) out[#out + 1] = line end
+    local function path(inst)
+        local ok, p = pcall(function() return inst:GetFullName() end)
+        return ok and p or tostring(inst)
+    end
+    local function attrs(inst)
+        local ok, a = pcall(function() return inst:GetAttributes() end)
+        if not ok or not a then
+            return ""
+        end
+        local parts = {}
+        for k, v in pairs(a) do
+            parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
+        end
+        table.sort(parts)
+        return table.concat(parts, ", ")
+    end
+    local function serv(v, d)
+        local t = typeof(v)
+        if t == "string" then
+            return '"' .. v:sub(1, 30) .. '"'
+        elseif t == "number" or t == "boolean" or t == "nil" then
+            return tostring(v)
+        elseif t == "table" then
+            if d >= 3 then
+                return "{...}"
+            end
+            local parts, n = {}, 0
+            for k, val in pairs(v) do
+                n = n + 1
+                if n > 40 then
+                    parts[#parts + 1] = "..."
+                    break
+                end
+                parts[#parts + 1] = tostring(k) .. "=" .. serv(val, d + 1)
+            end
+            return "{" .. table.concat(parts, ", ") .. "}"
+        end
+        return t
+    end
+    local function dumpTree(inst, indent, depthLeft, counter)
+        if counter.n >= counter.max then
+            return
+        end
+        if inst:IsA("Decal") or inst:IsA("Texture") then
+            return
+        end
+        counter.n = counter.n + 1
+        local line = string.rep("  ", indent) .. inst.ClassName .. " " .. inst.Name
+        if inst:IsA("ValueBase") then
+            local ok, val = pcall(function() return inst.Value end)
+            line = line .. " = " .. tostring(ok and val or "?")
+        end
+        if inst:IsA("TextLabel") or inst:IsA("TextButton") then
+            line = line .. " '" .. tostring(inst.Text) .. "'"
+        end
+        local a = attrs(inst)
+        if a ~= "" then
+            line = line .. " [" .. a .. "]"
+        end
+        add(line)
+        if depthLeft > 0 then
+            for _, c in ipairs(inst:GetChildren()) do
+                dumpTree(c, indent + 1, depthLeft - 1, counter)
+            end
+        end
+    end
+
+    add("=== SCAN ANIME CARD FARM ===")
+    add("PlaceId: " .. tostring(game.PlaceId) .. " | GameId: " .. tostring(game.GameId))
+
+    -- Remotes
+    add("")
+    add("--- REMOTES (E=Event, F=Function; relativo a ReplicatedStorage) ---")
+    local nR = 0
+    for _, d in ipairs(RS:GetDescendants()) do
+        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") or d.ClassName == "UnreliableRemoteEvent" then
+            nR = nR + 1
+            if nR <= 400 then
+                local full = (path(d):gsub("^ReplicatedStorage%.", ""))
+                add((d:IsA("RemoteFunction") and "F " or "E ") .. full)
+            end
+        end
+    end
+    add("Total de remotes: " .. nR)
+    local others = 0
+    for _, root in ipairs({ workspace, game:GetService("ReplicatedFirst") }) do
+        for _, d in ipairs(root:GetDescendants()) do
+            if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+                others = others + 1
+                if others <= 40 then
+                    add("(fora do ReplicatedStorage) " .. path(d))
+                end
+            end
+        end
+    end
+
+    -- ReplicatedStorage (nível 1 e conteúdo)
+    add("")
+    add("--- REPLICATEDSTORAGE ---")
+    for n, c in ipairs(RS:GetChildren()) do
+        if n > 80 then
+            add("...")
+            break
+        end
+        local names, k = {}, 0
+        for _, cc in ipairs(c:GetChildren()) do
+            k = k + 1
+            if k > 30 then
+                names[#names + 1] = "..."
+                break
+            end
+            names[#names + 1] = cc.Name
+        end
+        add(c.ClassName .. ": " .. c.Name .. " -> " .. table.concat(names, ", "))
+    end
+
+    -- Jogador
+    add("")
+    add("--- JOGADOR ---")
+    local pa = attrs(lp)
+    add("Atributos: " .. (pa ~= "" and pa or "(nenhum)"))
+    local ls = lp:FindFirstChild("leaderstats")
+    if ls then
+        for _, v in ipairs(ls:GetChildren()) do
+            local ok, val = pcall(function() return v.Value end)
+            add("leaderstat " .. v.ClassName .. " " .. v.Name .. " = " .. tostring(ok and val or "?"))
+        end
+    end
+    for _, folder in ipairs(lp:GetChildren()) do
+        if folder:IsA("Folder") or folder:IsA("Configuration") then
+            local names = {}
+            for i, c in ipairs(folder:GetChildren()) do
+                if i > 25 then
+                    names[#names + 1] = "..."
+                    break
+                end
+                names[#names + 1] = c.Name
+            end
+            add("Pasta no jogador: " .. folder.Name .. " -> " .. table.concat(names, ", "))
+        end
+    end
+
+    local containers = { lp:FindFirstChild("Backpack"), lp.Character }
+    for ci = 1, 2 do
+        local container = containers[ci]
+        if container then
+            local nT = 0
+            for _, t in ipairs(container:GetChildren()) do
+                if t:IsA("Tool") then
+                    nT = nT + 1
+                    if nT <= 15 then
+                        add("Tool: " .. t.Name .. " (em " .. container.Name .. ") [" .. attrs(t) .. "]")
+                    end
+                end
+            end
+            if nT > 15 then
+                add("... +" .. (nT - 15) .. " tools")
+            end
+        end
+    end
+
+    -- Interface
+    add("")
+    add("--- INTERFACE (PlayerGui) ---")
+    local pg = lp:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, g in ipairs(pg:GetChildren()) do
+            local en = g:IsA("ScreenGui") and tostring(g.Enabled) or "-"
+            add(g.ClassName .. ": " .. g.Name .. " (Enabled=" .. en .. ")")
+        end
+        add("")
+        add("--- BOTOES (primeiros 150) ---")
+        local bN = 0
+        for _, d in ipairs(pg:GetDescendants()) do
+            if d:IsA("TextButton") or d:IsA("ImageButton") then
+                bN = bN + 1
+                if bN <= 150 then
+                    local txt = d:IsA("TextButton") and d.Text or ""
+                    add(d.ClassName .. " '" .. txt .. "' " .. path(d))
+                end
+            end
+        end
+    end
+
+    -- Workspace
+    add("")
+    add("--- WORKSPACE (nivel superior) ---")
+    for n, c in ipairs(workspace:GetChildren()) do
+        if n > 80 then
+            add("...")
+            break
+        end
+        add(c.ClassName .. ": " .. c.Name)
+    end
+
+    -- Prompts e cliques
+    local prompts, pOrder = {}, {}
+    local clicks, cOrder = {}, {}
+    local i = 0
+    for _, d in ipairs(workspace:GetDescendants()) do
+        i = i + 1
+        if i % 3000 == 0 then
+            task.wait()
+        end
+        if d:IsA("ProximityPrompt") then
+            local key = tostring(d.ActionText) .. " | " .. tostring(d.ObjectText) .. " | pai: " .. (d.Parent and d.Parent.Name or "?")
+            if not prompts[key] then
+                prompts[key] = { count = 0, first = path(d) }
+                pOrder[#pOrder + 1] = key
+            end
+            prompts[key].count = prompts[key].count + 1
+        elseif d:IsA("ClickDetector") then
+            local key = d.Parent and d.Parent.Name or "?"
+            if not clicks[key] then
+                clicks[key] = { count = 0, first = path(d) }
+                cOrder[#cOrder + 1] = key
+            end
+            clicks[key].count = clicks[key].count + 1
+        end
+    end
+    add("")
+    add("--- PROXIMITY PROMPTS ---")
+    for n, key in ipairs(pOrder) do
+        if n > 40 then
+            add("...")
+            break
+        end
+        add(key .. " x" .. prompts[key].count .. "  ex: " .. prompts[key].first)
+    end
+    add("")
+    add("--- CLICK DETECTORS ---")
+    for n, key in ipairs(cOrder) do
+        if n > 30 then
+            add("...")
+            break
+        end
+        add(key .. " x" .. clicks[key].count .. "  ex: " .. clicks[key].first)
+    end
+
+    -- Plots (o jogo tem um plot por jogador)
+    add("")
+    add("--- PLOTS (Workspace.MAP.Plots) ---")
+    local mapF = workspace:FindFirstChild("MAP")
+    local plotsF = mapF and mapF:FindFirstChild("Plots")
+    if plotsF then
+        local function mentionsMe(inst)
+            local a = attrs(inst)
+            return a:find(lp.Name, 1, true) ~= nil or a:find(tostring(lp.UserId), 1, true) ~= nil
+        end
+        local mine
+        for _, pl in ipairs(plotsF:GetChildren()) do
+            local kids = {}
+            for k, c in ipairs(pl:GetChildren()) do
+                if k > 12 then
+                    kids[#kids + 1] = "..."
+                    break
+                end
+                local ca = attrs(c)
+                kids[#kids + 1] = c.Name .. (ca ~= "" and ("[" .. ca:sub(1, 80) .. "]") or "")
+                if mentionsMe(c) then
+                    mine = mine or pl
+                end
+            end
+            if mentionsMe(pl) then
+                mine = mine or pl
+            end
+            add("plot " .. pl.Name .. " [" .. attrs(pl):sub(1, 120) .. "] -> " .. table.concat(kids, ", "))
+        end
+        if mine then
+            add("# SEU PLOT: " .. mine.Name)
+            dumpTree(mine, 0, 3, { n = 0, max = 110 })
         else
-            statusBox.Text = "Status: Em repouso."
+            add("(não consegui identificar o seu plot pelos atributos)")
         end
-        task.wait(0.3)
+    else
+        add("(Workspace.MAP.Plots não existe)")
+    end
+
+    -- Módulos de configuração (preços, cartas, packs, mutações...)
+    add("")
+    add("--- MODULOS DE DADOS (ReplicatedStorage) ---")
+    local words = { "config", "registry", "pack", "card", "shop", "upgrade", "rebirth", "mutation",
+        "rarity", "price", "data", "world", "boost", "quest", "reward", "index", "settings", "stat",
+        "conveyor", "floor", "luck", "artifact", "boss", "trait", "grade", "ascension", "craft",
+        "tower", "limited", "offline", "time", "gamepass", "cash" }
+    local shown = 0
+    for _, d in ipairs(RS:GetDescendants()) do
+        if d:IsA("ModuleScript") and shown < 30 then
+            local ln = d.Name:lower()
+            local match = false
+            for _, w in ipairs(words) do
+                if ln:find(w, 1, true) then
+                    match = true
+                    break
+                end
+            end
+            if match then
+                shown = shown + 1
+                local okReq, data = pcall(require, d)
+                if okReq then
+                    add("# " .. path(d))
+                    add(serv(data, 0):sub(1, 2200))
+                else
+                    add("# " .. path(d) .. ": require falhou (" .. tostring(data) .. ")")
+                end
+            end
+        end
+    end
+
+    -- Telas principais em detalhe (ignora as do sistema)
+    if pg then
+        add("")
+        add("--- TELAS EM DETALHE ---")
+        local skip = { "topbar", "touchgui", "backpackgui", "proximityprompts", "cmdr" }
+        local done = 0
+        for _, g in ipairs(pg:GetChildren()) do
+            if g:IsA("ScreenGui") and done < 6 then
+                local ln = g.Name:lower()
+                local skipIt = false
+                for _, w in ipairs(skip) do
+                    if ln:find(w, 1, true) then
+                        skipIt = true
+                        break
+                    end
+                end
+                if not skipIt then
+                    done = done + 1
+                    add("# " .. g.Name)
+                    dumpTree(g, 0, 4, { n = 0, max = 45 })
+                end
+            end
+        end
+    end
+
+    add("")
+    add("=== FIM DO SCAN ===")
+    return table.concat(out, "\n")
+end
+
+-- Gravado: ReplicatedStorage.CardSlotRE:FireServer("EquipBest")
+local function EquipBestNow()
+    local r = game:GetService("ReplicatedStorage"):FindFirstChild("CardSlotRE")
+    if r then
+        r:FireServer("EquipBest")
+    end
+end
+
+local autoEquip = false
+local function SetAutoEquip(on)
+    if on == autoEquip then
+        return
+    end
+    autoEquip = on
+    if on then
+        task.spawn(function()
+            while autoEquip do
+                pcall(EquipBestNow)
+                task.wait(30)
+            end
+        end)
+    end
+end
+
+local function AntiAFK()
+    if G.ACFAntiAFK then
+        return
+    end
+    G.ACFAntiAFK = true
+    local VU = game:GetService("VirtualUser")
+    game:GetService("Players").LocalPlayer.Idled:Connect(function()
+        VU:CaptureController()
+        VU:ClickButton2(Vector2.new())
+    end)
+end
+
+-- ============================================
+-- AUTOMAÇÕES (v2.1) - baseadas nos remotes gravados
+--   Esteira:   botão do plot (ClickDetector) -> ConveyorRE S>C "ButtonClicked"/"SpawnAndMoveToB"/"PackAtB"
+--   Comprar:   ConveyorRE:FireServer("TryBuy", {ItemId = id})
+--   Melhorar:  CardSlotRE:FireServer("UpgradeCard", {SlotIndex = n})   (mín. 0.2s entre chamadas)
+--   Torre:     InfinityTowerRE:FireServer("StartBattle", {Team = {tools}, Difficulty = "Easy"})
+--   Raid:      BossRaidRE:FireServer("StartFight", {Team = {tools}, Difficulty = "Easy"})
+--   Recompensa: PlayTimeRewardRE:FireServer("ClaimReward", {RewardIndex = i})
+-- O combate da torre e do raid roda no seu cliente (o próprio jogo manda EndBattle/EndFight);
+-- o hub só INICIA as lutas. Ele nunca envia andar/dano inventado.
+-- ============================================
+local RS = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local lp = Players.LocalPlayer
+
+local CFG = {
+    UpgradeGap = 0.22,       -- o jogo mostra "Wait 0.2s" se melhorar mais rápido
+    UpgradeAckWait = 1.2,    -- espera pela confirmação (celular tem latência alta)
+    UpgradeBurst = 25,       -- melhorias seguidas no mesmo slot antes de passar para o próximo
+    MaxSlot = 30,            -- FloorsConfig.MAX_SLOT
+    InventoryReserve = 6,    -- deixa folga na mochila ao comprar packs
+    PlaceOpenDelay = 0.6,
+    BatchTimeout = 20,       -- espera máxima pelo lote da esteira terminar
+    ConveyorGap = 1.0,
+    BatchSettle = 1.5,       -- espera depois do clique antes de contar o lote pendente
+    TeamSize = 6,            -- tamanho do time da torre/raid (reduz sozinho se o servidor recusar)
+    FightTimeout = 900,
+}
+
+local S = {
+    buy = false, upgrade = false, playtime = false, place = false,
+    conveyor = false, tower = false, raid = false,
+    minRank = 1,
+    towerDiff = "Easy", raidDiff = "Easy",
+    packs = {},              -- ItemId -> dados do pack que passou na esteira
+    pend = {},               -- ItemId -> hora em que nasceu (lote em andamento)
+    btnAck = 0,
+    plotNumber = nil,        -- aprendido pelos eventos da esteira (só chegam do seu plot)
+    lvl = {}, upAck = {},    -- nível e confirmação por slot
+    ptElapsed = nil, ptAt = 0, ptClaimed = {},
+    teamSize = CFG.TeamSize,
+    towerAck = 0, towerLast = nil, raidState = nil, raidAt = 0,
+    lastPopup = nil,
+}
+
+if G.ACFConns then
+    for _, c in ipairs(G.ACFConns) do
+        pcall(function() c:Disconnect() end)
+    end
+end
+local conns = {}
+G.ACFConns = conns
+
+local function remote(name)
+    local rf = RS:FindFirstChild("Remotes")
+    return (rf and rf:FindFirstChild(name)) or RS:FindFirstChild(name)
+end
+
+local function connect(name, fn)
+    local r = remote(name)
+    if r and r:IsA("RemoteEvent") then
+        conns[#conns + 1] = r.OnClientEvent:Connect(fn)
+    end
+end
+
+local function short(n)
+    if type(n) ~= "number" then
+        return tostring(n)
+    end
+    return string.format("%.3g", n)
+end
+
+-- ---------- seu plot ----------
+local function findMyPlot()
+    local map = workspace:FindFirstChild("MAP")
+    local plots = map and map:FindFirstChild("Plots")
+    if not plots then
+        return nil
+    end
+    -- 1) pelo nome no álbum do plot
+    local nameA, nameB = lp.DisplayName, lp.Name
+    for _, pl in ipairs(plots:GetChildren()) do
+        local root = pl:FindFirstChild("Plot_N0") or pl
+        local album = root:FindFirstChild("AlbumModel")
+        local prompt = album and album:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt then
+            local t = prompt.ObjectText
+            if (nameA ~= "" and t:find(nameA, 1, true)) or (nameB ~= "" and t:find(nameB, 1, true)) then
+                return root
+            end
+        end
+    end
+    -- 2) pelo número visto nos eventos da esteira
+    if S.plotNumber then
+        local pl = plots:FindFirstChild(tostring(S.plotNumber))
+        if pl then
+            return pl:FindFirstChild("Plot_N0") or pl
+        end
+    end
+    -- 3) o plot mais perto do personagem
+    local char = lp.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        local best, bestD
+        for _, pl in ipairs(plots:GetChildren()) do
+            local r0 = pl:FindFirstChild("Plot_N0") or pl
+            local ref = r0:FindFirstChild("ButtonPart") or r0:FindFirstChild("SellPart")
+            if ref and ref:IsA("BasePart") then
+                local d = (ref.Position - hrp.Position).Magnitude
+                if not bestD or d < bestD then
+                    best, bestD = r0, d
+                end
+            end
+        end
+        if best and bestD < 200 then
+            return best
+        end
+    end
+    return nil
+end
+
+local function promptPos(prompt)
+    local p = prompt.Parent
+    if p and p:IsA("BasePart") then
+        return p.Position
+    end
+    if p and p:IsA("Attachment") then
+        return p.WorldPosition
+    end
+    local part = p and p:FindFirstChildWhichIsA("BasePart", true)
+    return part and part.Position or nil
+end
+
+-- slots que têm carta (o prompt "Remove" aparece em slot ocupado)
+local function occupiedSlots()
+    local plotRoot = findMyPlot()
+    if not plotRoot then
+        return nil
+    end
+    local slots = {}
+    for _, d in ipairs(plotRoot:GetDescendants()) do
+        if d:IsA("ProximityPrompt") and d.ActionText == "Remove" and d.ObjectText == ""
+            and d.Parent and d.Parent.Name == "PromptHolder" then
+            local holder = d.Parent.Parent
+            local n = holder and tonumber(holder.Name:match("^CardSlot(%d+)$"))
+            if n then
+                slots[#slots + 1] = n
+            end
+        end
+    end
+    table.sort(slots)
+    return slots
+end
+
+-- ---------- esteira e packs ----------
+local function backpackCount()
+    local bp = lp:FindFirstChild("Backpack")
+    return bp and #bp:GetChildren() or 0
+end
+
+local function pendingCount()
+    local n = 0
+    for id, t in pairs(S.pend) do
+        if os.clock() - t > 30 then
+            S.pend[id] = nil
+        else
+            n = n + 1
+        end
+    end
+    return n
+end
+
+local invWarnAt = -100
+local function tryBuy(itemId, info)
+    local cap = (lp:GetAttribute("InventoryMaxSlots") or 150) - CFG.InventoryReserve
+    if backpackCount() >= cap then
+        if os.clock() - invWarnAt > 60 then
+            invWarnAt = os.clock()
+            Say("Auto comprar", "Mochila quase cheia (" .. backpackCount() .. ")")
+        end
+        return
+    end
+    local r = remote("ConveyorRE")
+    if r then
+        info.tries = (info.tries or 0) + 1
+        r:FireServer("TryBuy", { ItemId = itemId })
+    end
+end
+
+local function buyPack(itemId, info)
+    local before = backpackCount()
+    tryBuy(itemId, info)
+    task.delay(1.5, function()
+        if S.buy and backpackCount() <= before and (info.tries or 0) < 2 then
+            tryBuy(itemId, info) -- uma segunda tentativa se nada entrou na mochila
+        end
+    end)
+end
+
+local function onConveyor(action, data)
+    if type(data) ~= "table" then
+        return
+    end
+    if data.PlotNumber and not S.plotNumber then
+        S.plotNumber = data.PlotNumber
+    end
+    if action == "ButtonClicked" then
+        S.btnAck = os.clock()
+    elseif action == "MoveToCAndDestroy" and data.ItemId then
+        S.pend[data.ItemId] = nil
+    elseif action == "SpawnAndMoveToB" and data.ItemId then
+        S.pend[data.ItemId] = os.clock()
+        S.packs[data.ItemId] = {
+            name = data.PackAssetName or data.PackId, rarity = data.Rarity,
+            rank = data.RarityRank or 0, price = data.Price, t = os.clock(),
+        }
+        for id, info in pairs(S.packs) do -- limpa itens antigos
+            if os.clock() - info.t > 180 then
+                S.packs[id] = nil
+            end
+        end
+        -- se o aviso "PackAtB" não vier, tenta quando o pack já deve ter chegado
+        task.delay(6, function()
+            local info = S.packs[data.ItemId]
+            if S.buy and info and not info.atB and (info.tries or 0) == 0 and info.rank >= S.minRank then
+                buyPack(data.ItemId, info)
+            end
+        end)
+    elseif action == "PackAtB" and data.ItemId then
+        local info = S.packs[data.ItemId]
+        if info then
+            info.atB = true
+            if S.buy and info.rank >= S.minRank and (info.tries or 0) == 0 then
+                task.spawn(buyPack, data.ItemId, info)
+            end
+        end
+    end
+end
+
+-- clica no botão da esteira do seu plot e espera o lote terminar
+local function conveyorLoop()
+    local warned = false
+    while S.conveyor do
+        local plotRoot = findMyPlot()
+        local btn = plotRoot and plotRoot:FindFirstChild("ButtonPart")
+        local cd = btn and btn:FindFirstChildOfClass("ClickDetector")
+        if not (cd and fireclickdetector) then
+            if not warned then
+                warned = true
+                Say("Esteira", "Não achei o botão do seu plot (ou o executor não tem fireclickdetector)")
+            end
+            task.wait(5)
+        else
+            local char = lp.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local origin
+            if root and (root.Position - btn.Position).Magnitude > 20 then
+                origin = root.CFrame -- o servidor confere a distância do clique
+                root.CFrame = CFrame.new(btn.Position + Vector3.new(0, 3, 5))
+                task.wait(0.2)
+            end
+            local stamp = S.btnAck
+            fireclickdetector(cd)
+            local t0 = os.clock()
+            while S.conveyor and S.btnAck == stamp and os.clock() - t0 < 3 do
+                task.wait(0.1)
+            end
+            if origin and root and root.Parent then
+                root.CFrame = origin
+            end
+            task.wait(CFG.BatchSettle) -- dá tempo dos packs do lote aparecerem
+            local t1 = os.clock()
+            while S.conveyor and pendingCount() > 0 and os.clock() - t1 < CFG.BatchTimeout do
+                task.wait(0.5)
+            end
+            task.wait(CFG.ConveyorGap)
+        end
+    end
+end
+
+-- ---------- cartas ----------
+local function onPopup(a, b)
+    local text = type(a) == "string" and a or (type(b) == "string" and b or nil)
+    if text then
+        S.lastPopup = text:sub(1, 80)
+    end
+end
+
+local function onCardSlot(action, data)
+    if type(data) ~= "table" then
+        return
+    end
+    if action == "CardUpgraded" and data.SlotIndex then
+        S.lvl[data.SlotIndex] = data.NewLevel
+        S.upAck[data.SlotIndex] = os.clock()
+    elseif action == "CardRevealed" and data.SlotIndex then
+        S.lvl[data.SlotIndex] = data.CardLevel
+    end
+end
+
+local function upgradeLoop()
+    local cool = {}
+    local total, reportAt, noticeAt = 0, os.clock(), -100
+    while S.upgrade do
+        local r = remote("CardSlotRE")
+        if not r then
+            Say("Auto melhorar", "Não achei CardSlotRE")
+            break
+        end
+        local slots = occupiedSlots()
+        if not slots or #slots == 0 then
+            slots = {}
+            for i = 1, CFG.MaxSlot do
+                slots[i] = i
+            end
+        end
+        local did = false
+        for _, slot in ipairs(slots) do
+            if not S.upgrade then
+                break
+            end
+            if (cool[slot] or 0) <= os.clock() then
+                local burst = 0
+                while S.upgrade and burst < CFG.UpgradeBurst do
+                    local stamp = S.upAck[slot] or 0
+                    r:FireServer("UpgradeCard", { SlotIndex = slot })
+                    local t0 = os.clock()
+                    while (S.upAck[slot] or 0) == stamp and os.clock() - t0 < CFG.UpgradeAckWait do
+                        task.wait(0.05)
+                    end
+                    if (S.upAck[slot] or 0) ~= stamp then
+                        burst = burst + 1
+                        total = total + 1
+                        did = true
+                        task.wait(CFG.UpgradeGap)
+                    else
+                        cool[slot] = os.clock() + 30 -- sem resposta: vazio, no máximo ou sem dinheiro
+                        break
+                    end
+                end
+            end
+        end
+        if os.clock() - reportAt > 30 and total > 0 then
+            reportAt = os.clock()
+            Say("Auto melhorar", total .. " melhorias até agora")
+        end
+        if not did then
+            if os.clock() - noticeAt > 30 then
+                noticeAt = os.clock()
+                Say("Auto melhorar", "Nenhuma carta subiu. "
+                    .. (S.lastPopup and ("O jogo disse: " .. S.lastPopup) or "Sem dinheiro ou todas no máximo?"))
+            end
+            task.wait(3)
+        end
+    end
+end
+
+-- ---------- recompensas de tempo ----------
+local function onPlayTime(action, data)
+    if type(data) ~= "table" then
+        return
+    end
+    if action == "State" then
+        S.ptElapsed, S.ptAt = data.Elapsed, os.clock()
+        if type(data.Rewards) == "table" then
+            for i, rw in pairs(data.Rewards) do
+                if type(rw) == "table" and (rw.Claimed or rw.claimed) then
+                    S.ptClaimed[i] = true
+                end
+            end
+        end
+    elseif action == "ClaimSuccess" and data.RewardIndex then
+        S.ptClaimed[data.RewardIndex] = true
+    end
+end
+
+local function playtimeLoop()
+    local tried = {}
+    while S.playtime do
+        local ok, cfg = pcall(function() return require(RS.Modules.PlayTimeRewardConfig) end)
+        local r = remote("PlayTimeRewardRE")
+        if r and ok and type(cfg) == "table" and type(cfg.Rewards) == "table" then
+            local elapsed = S.ptElapsed and (S.ptElapsed + (os.clock() - S.ptAt)) or nil
+            for _, rw in ipairs(cfg.Rewards) do
+                local i = rw.Index
+                if S.playtime and i and not S.ptClaimed[i] and (os.clock() - (tried[i] or -1000)) > 90 then
+                    if elapsed == nil or elapsed >= (rw.Time or 0) then
+                        tried[i] = os.clock()
+                        r:FireServer("ClaimReward", { RewardIndex = i })
+                        task.wait(1)
+                    end
+                end
+            end
+        end
+        task.wait(20)
+    end
+end
+
+-- ---------- time para torre e raid ----------
+local cardsCfg
+local function cardPower(tool)
+    if cardsCfg == nil then
+        local ok, cfg = pcall(function() return require(RS.Modules.CardsConfig) end)
+        cardsCfg = (ok and type(cfg) == "table" and type(cfg.Cards) == "table") and cfg.Cards or false
+    end
+    local entry = cardsCfg and cardsCfg[tool:GetAttribute("CardName")]
+    return (entry and entry.BaseRevenue) or 0, tool:GetAttribute("CardLevel") or 0
+end
+
+-- melhores cartas da mochila (as que estão nos slots não são ferramentas)
+local function bestTeam(n)
+    local bp = lp:FindFirstChild("Backpack")
+    local tools = {}
+    if bp then
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") and t:GetAttribute("CardName") ~= nil then
+                tools[#tools + 1] = t
+            end
+        end
+    end
+    table.sort(tools, function(a, b)
+        local ra, la = cardPower(a)
+        local rb, lb = cardPower(b)
+        if ra ~= rb then
+            return ra > rb
+        end
+        return la > lb
+    end)
+    local team = {}
+    for i = 1, math.min(n, #tools) do
+        team[i] = tools[i]
+    end
+    return team
+end
+
+local function onTower(action, data)
+    if action == "BattleAccepted" then
+        S.towerAck = os.clock()
+    elseif action == "RewardResult" and type(data) == "table" then
+        Say("Torre", "Andar " .. tostring(data.Floor) .. " (" .. tostring(data.Difficulty) .. ")")
+    end
+end
+
+local function towerLoop()
+    local stateAt, fails, noCardAt = -1000, 0, -100
+    while S.tower do
+        local r = remote("InfinityTowerRE")
+        if r and not lp:GetAttribute("InfinityTowerInBattle") and not lp:GetAttribute("BossRaidInBattle") then
+            local diff = S.towerDiff
+            if lp:GetAttribute("InfinityTowerUnlocked" .. diff) == false then
+                Say("Torre", "A dificuldade " .. diff .. " ainda está bloqueada")
+                S.tower = false
+                break
+            end
+            if os.clock() - stateAt > 300 then
+                stateAt = os.clock()
+                r:FireServer("RequestTowerState")
+                task.wait(0.5)
+            end
+            local team = bestTeam(S.teamSize)
+            if #team == 0 then
+                if os.clock() - noCardAt > 60 then
+                    noCardAt = os.clock()
+                    Say("Torre", "Sem cartas na mochila para montar o time")
+                end
+                task.wait(10)
+            else
+                local stamp = S.towerAck
+                r:FireServer("StartBattle", { Team = team, Difficulty = diff })
+                local t0 = os.clock()
+                while S.towerAck == stamp and os.clock() - t0 < 4 do
+                    task.wait(0.1)
+                end
+                if S.towerAck == stamp then
+                    -- sem BattleAccepted: o servidor pode limitar o tamanho do time
+                    fails = fails + 1
+                    S.teamSize = math.max(1, #team - 1)
+                    if fails == 3 then
+                        Say("Torre", "O servidor não aceitou o início (time de " .. #team .. ")")
+                    end
+                    task.wait(3)
+                else
+                    fails = 0
+                    local t1 = os.clock()
+                    task.wait(2)
+                    while S.tower and lp:GetAttribute("InfinityTowerInBattle") and os.clock() - t1 < CFG.FightTimeout do
+                        task.wait(1)
+                    end
+                end
+            end
+        end
+        task.wait(2)
+    end
+end
+
+local function onRaid(action, data)
+    if action == "State" and type(data) == "table" then
+        S.raidState, S.raidAt = data, os.clock()
+    end
+end
+
+local function triedAlready(state, diff)
+    local td = state.TriedDifficulties
+    if type(td) ~= "table" then
+        return false
+    end
+    if td[diff] then
+        return true
+    end
+    for _, v in pairs(td) do
+        if v == diff then
+            return true
+        end
+    end
+    return false
+end
+
+local function raidLoop()
+    local lastTry = {}
+    local noCardAt = -100
+    while S.raid do
+        local st = S.raidState
+        local r = remote("BossRaidRE")
+        if st and r and not lp:GetAttribute("BossRaidInBattle") and not lp:GetAttribute("InfinityTowerInBattle") then
+            local left = (st.TimeLeftInWindow or 0) - (os.clock() - S.raidAt)
+            local key = tostring(st.DisplayedBossId) .. ":" .. S.raidDiff
+            if not st.DisplayedBossIsPreview and left > 15 and not triedAlready(st, S.raidDiff)
+                and os.clock() - (lastTry[key] or -1000) > 60 then
+                local team = bestTeam(S.teamSize)
+                if #team == 0 then
+                    if os.clock() - noCardAt > 60 then
+                        noCardAt = os.clock()
+                        Say("Raid", "Sem cartas na mochila para montar o time")
+                    end
+                else
+                    lastTry[key] = os.clock()
+                    Say("Raid", "Entrando em " .. tostring(st.DisplayedBossName) .. " (" .. S.raidDiff .. ")")
+                    r:FireServer("StartFight", { Team = team, Difficulty = S.raidDiff })
+                    local t0 = os.clock()
+                    while not lp:GetAttribute("BossRaidInBattle") and os.clock() - t0 < 6 do
+                        task.wait(0.2)
+                    end
+                    if lp:GetAttribute("BossRaidInBattle") then
+                        local t1 = os.clock()
+                        while S.raid and lp:GetAttribute("BossRaidInBattle") and os.clock() - t1 < CFG.FightTimeout do
+                            task.wait(1)
+                        end
+                    else
+                        S.teamSize = math.max(1, #team - 1)
+                        Say("Raid", "O servidor não iniciou a luta")
+                    end
+                end
+            end
+        end
+        task.wait(3)
+    end
+end
+
+-- ---------- colocar / abrir packs (TESTE: usa ProximityPrompt) ----------
+-- pack mais valioso da mochila (packs têm o atributo Price; cartas têm CardName)
+local function bestPack()
+    local best, bestPrice
+    for _, container in ipairs({ lp:FindFirstChild("Backpack"), lp.Character }) do
+        if container then
+            for _, t in ipairs(container:GetChildren()) do
+                if t:IsA("Tool") and t:GetAttribute("CardName") == nil then
+                    local price = t:GetAttribute("Price")
+                    if type(price) == "number" and (not bestPrice or price > bestPrice) then
+                        best, bestPrice = t, price
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function placeOpenLoop()
+    local warned = false
+    while S.place do
+        local char = lp.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not fireproximityprompt then
+            if not warned then
+                warned = true
+                Say("Colocar/abrir", "Seu executor não tem fireproximityprompt")
+            end
+            task.wait(5)
+        elseif root and hum then
+            local plotRoot = findMyPlot()
+            if plotRoot then
+                local readies, empties = {}, {}
+                for _, d in ipairs(plotRoot:GetDescendants()) do
+                    if d:IsA("ProximityPrompt") and d.Enabled and d.Parent and d.Parent.Name == "PromptHolder" then
+                        if d.ActionText == "Open" then
+                            readies[#readies + 1] = d
+                        elseif d.ActionText == "Place" and d.ObjectText == "" then
+                            empties[#empties + 1] = d
+                        end
+                    end
+                end
+                local origin = root.CFrame
+                local acted = false
+                for _, pr in ipairs(readies) do
+                    if not S.place then
+                        break
+                    end
+                    local pos = promptPos(pr)
+                    if pos then
+                        root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 3))
+                        task.wait(0.15)
+                        fireproximityprompt(pr)
+                        acted = true
+                        task.wait(CFG.PlaceOpenDelay)
+                    end
+                end
+                for _, pr in ipairs(empties) do
+                    if not S.place then
+                        break
+                    end
+                    local pack = bestPack()
+                    if not pack then
+                        break
+                    end
+                    local pos = promptPos(pr)
+                    if pos then
+                        pcall(function() hum:EquipTool(pack) end)
+                        local t0 = os.clock()
+                        while pack.Parent ~= char and os.clock() - t0 < 1 do
+                            task.wait(0.05)
+                        end
+                        root.CFrame = CFrame.new(pos + Vector3.new(0, 3, 3))
+                        task.wait(0.15)
+                        fireproximityprompt(pr)
+                        acted = true
+                        task.wait(CFG.PlaceOpenDelay)
+                    end
+                end
+                if acted then
+                    root.CFrame = origin
+                end
+            end
+            task.wait(5)
+        else
+            task.wait(1)
+        end
+    end
+end
+
+-- ---------- ligações e atalhos ----------
+connect("ConveyorRE", onConveyor)
+connect("CardSlotRE", onCardSlot)
+connect("PlayTimeRewardRE", onPlayTime)
+connect("InfinityTowerRE", onTower)
+connect("BossRaidRE", onRaid)
+connect("DisplayPopup", onPopup)
+connect("SellRE", function(action, data)
+    if type(data) == "table" and (action == "Result" or action == "ResultHand") then
+        Say("Venda", "Total $" .. short(data.Total) .. (data.Count and (" (" .. data.Count .. " itens)") or "")
+            .. (data.ItemName and (" - " .. data.ItemName) or ""))
     end
 end)
 
--- AUTO CLICKER
-local autoClickActive = false
-createToggle("⚡ Auto Click (Ganhar Força)", function(s) autoClickActive = s end)
-
-task.spawn(function()
-    while activeConnections do
-        if autoClickActive and clickRemote then 
-            pcall(function() clickRemote:FireServer() end) 
+local function setFlag(key, loop)
+    return function(on)
+        if S[key] == on then
+            return
         end
-        task.wait(0.05)
+        S[key] = on
+        if on then
+            task.spawn(loop)
+        end
     end
+end
+local SetAutoUpgrade = setFlag("upgrade", upgradeLoop)
+local SetAutoPlaytime = setFlag("playtime", playtimeLoop)
+local SetAutoPlaceOpen = setFlag("place", placeOpenLoop)
+local SetAutoConveyor = setFlag("conveyor", conveyorLoop)
+local SetAutoTower = setFlag("tower", towerLoop)
+local SetAutoRaid = setFlag("raid", raidLoop)
+
+local function SetAutoBuy(on)
+    S.buy = on
+end
+
+local function SellAllTest()
+    local tp, sell = remote("TeleportButtonRE"), remote("SellRE")
+    if not (tp and sell) then
+        Say("Vender", "Remotes não encontrados")
+        return
+    end
+    tp:FireServer("Sell")
+    task.wait(1.2)
+    sell:FireServer("SellAll")
+    task.wait(1.5)
+    tp:FireServer("Base")
+end
+
+local function Teleport(where)
+    local tp = remote("TeleportButtonRE")
+    if tp then
+        tp:FireServer(where)
+    end
+end
+
+-- opções de raridade do pack, na ordem do jogo (ConveyorPacks.RarityRank)
+local function loadPackRarities()
+    local ranks, names = {}, {}
+    local ok, cp = pcall(function() return require(RS.Modules.ConveyorPacks) end)
+    if ok and type(cp) == "table" and type(cp.RarityRank) == "table" then
+        for name, rank in pairs(cp.RarityRank) do
+            if type(rank) == "number" and rank < 99 then
+                ranks[name] = rank
+                names[#names + 1] = name
+            end
+        end
+    end
+    if not ranks["Common"] then
+        ranks["Common"] = 1
+        names[#names + 1] = "Common"
+    end
+    table.sort(names, function(a, b)
+        if ranks[a] ~= ranks[b] then
+            return ranks[a] < ranks[b]
+        end
+        return a < b
+    end)
+    return names, ranks
+end
+local PACK_NAMES, PACK_RANKS = loadPackRarities()
+S.minRank = PACK_RANKS[PACK_NAMES[1]] or 1
+local DIFFS = { "Easy", "Medium", "Hard", "Extreme" }
+
+-- ============================================
+-- INTERFACE
+-- ============================================
+local okRay, Rayfield = pcall(function()
+    return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 end)
+if not okRay or not Rayfield then
+    warn("[ACF] Falha ao carregar o Rayfield: " .. tostring(Rayfield))
+    return
+end
+G.ACFRayfield = Rayfield
 
--- BOTÃO FLUTUANTE
-local openToggleBtn = Instance.new("TextButton")
-openToggleBtn.Name = "ConstellationToggle"
-openToggleBtn.Size = UDim2.new(0, 48, 0, 48)
-openToggleBtn.Position = UDim2.new(0, 15, 0.4, 0)
-openToggleBtn.BackgroundColor3 = Color3.fromRGB(15, 10, 32)
-openToggleBtn.TextColor3 = Color3.fromRGB(210, 150, 255)
-openToggleBtn.Text = "❖"
-openToggleBtn.Font = Enum.Font.GothamBold
-openToggleBtn.TextSize = 20
-openToggleBtn.Active = true
-openToggleBtn.Draggable = true
-openToggleBtn.Parent = screenGui
+local ICON = 4483362458
+local function Notify(title, content, duration)
+    pcall(function()
+        Rayfield:Notify({ Title = title, Content = content, Duration = duration or 4, Image = ICON })
+    end)
+end
 
-local openCorner = Instance.new("UICorner")
-openCorner.CornerRadius = UDim.new(1, 0)
-openCorner.Parent = openToggleBtn
+local running = {}
+local function Run(name, fn)
+    if running[name] then
+        Notify("Aguarde", name .. " já está rodando")
+        return
+    end
+    running[name] = true
+    Notify("Rodando...", name)
+    task.spawn(function()
+        local ok, res = pcall(fn)
+        running[name] = nil
+        if not ok then
+            warn("[ACF] " .. name .. ": " .. tostring(res))
+            Notify("Erro ❌", name .. " falhou")
+            return
+        end
+        if type(res) == "string" and #res > 0 then
+            print(res)
+            local copied = false
+            if setclipboard then
+                copied = pcall(setclipboard, res)
+            end
+            Notify(copied and "Copiado ✅" or "Sem clipboard", copied and "Cole o resultado no chat com o Claude" or "Resultado no console (F9)", 6)
+        else
+            Notify("Pronto ✅", name)
+        end
+    end)
+end
 
-local isOpen = false
-openToggleBtn.MouseButton1Click:Connect(function()
-    isOpen = not isOpen
-    mainFrame.Visible = isOpen
-end)
+local Window = Rayfield:CreateWindow({
+    Name = "🃏 Anime Card Farm",
+    LoadingTitle = "Anime Card Farm",
+    LoadingSubtitle = "v2.1",
+    ConfigurationSaving = { Enabled = false },
+    Discord = { Enabled = false },
+    KeySystem = false,
+})
 
-closeButton.MouseButton1Click:Connect(function()
-    isOpen = false
-    mainFrame.Visible = false
-end)
+local function diffDropdown(tab, name, key)
+    tab:CreateDropdown({
+        Name = name,
+        Options = DIFFS,
+        CurrentOption = { "Easy" },
+        MultipleOptions = false,
+        Callback = function(opt)
+            S[key] = tostring(type(opt) == "table" and opt[1] or opt)
+            Notify("Dificuldade", S[key], 3)
+        end,
+    })
+end
+
+local Farm = Window:CreateTab("🃏 Farm", ICON)
+
+Farm:CreateSection("Esteira e packs")
+Farm:CreateToggle({
+    Name = "Auto girar a esteira (clica no botão do plot)",
+    CurrentValue = false,
+    Callback = function(v) SetAutoConveyor(v) end,
+})
+Farm:CreateToggle({
+    Name = "Auto comprar packs (raridade mínima abaixo)",
+    CurrentValue = false,
+    Callback = function(v) SetAutoBuy(v) end,
+})
+Farm:CreateDropdown({
+    Name = "Raridade mínima do pack",
+    Options = PACK_NAMES,
+    CurrentOption = { PACK_NAMES[1] },
+    MultipleOptions = false,
+    Callback = function(opt)
+        local name = type(opt) == "table" and opt[1] or opt
+        S.minRank = PACK_RANKS[tostring(name)] or 1
+        Notify("Raridade mínima", tostring(name) .. " (rank " .. tostring(S.minRank) .. ")", 3)
+    end,
+})
+
+Farm:CreateSection("Cartas")
+Farm:CreateToggle({
+    Name = "Auto melhorar cartas (slots com carta)",
+    CurrentValue = false,
+    Callback = function(v) SetAutoUpgrade(v) end,
+})
+Farm:CreateToggle({
+    Name = "Auto equipar melhores (a cada 30s)",
+    CurrentValue = false,
+    Callback = function(v) SetAutoEquip(v) end,
+})
+Farm:CreateToggle({
+    Name = "Auto colocar e abrir packs (teste)",
+    CurrentValue = false,
+    Callback = function(v) SetAutoPlaceOpen(v) end,
+})
+
+Farm:CreateSection("Torre infinita")
+Farm:CreateToggle({
+    Name = "Auto torre (usa as melhores cartas da mochila)",
+    CurrentValue = false,
+    Callback = function(v) SetAutoTower(v) end,
+})
+diffDropdown(Farm, "Dificuldade da torre", "towerDiff")
+
+Farm:CreateSection("Boss Raid")
+Farm:CreateToggle({
+    Name = "Auto raid boss (usa as melhores cartas da mochila)",
+    CurrentValue = false,
+    Callback = function(v) SetAutoRaid(v) end,
+})
+diffDropdown(Farm, "Dificuldade do raid (só Easy foi gravada)", "raidDiff")
+
+Farm:CreateSection("Recompensas")
+Farm:CreateToggle({
+    Name = "Auto recompensas de tempo",
+    CurrentValue = false,
+    Callback = function(v) SetAutoPlaytime(v) end,
+})
+
+Farm:CreateSection("Manual")
+Farm:CreateButton({
+    Name = "Equipar melhores cartas agora",
+    Callback = function() Run("Equipar melhores", EquipBestNow) end,
+})
+Farm:CreateButton({
+    Name = "Ir para a venda (Sell)",
+    Callback = function() Teleport("Sell") end,
+})
+Farm:CreateButton({
+    Name = "Voltar para a base (Base)",
+    Callback = function() Teleport("Base") end,
+})
+Farm:CreateButton({
+    Name = "Vender tudo - SellAll (teste: pode vender packs da mochila)",
+    Callback = function() Run("SellAll", SellAllTest) end,
+})
+Farm:CreateButton({
+    Name = "Anti-AFK",
+    Callback = function() Run("Anti-AFK", function() AntiAFK() end) end,
+})
+
+local Diag = Window:CreateTab("🔍 Diagnóstico", ICON)
+Diag:CreateSection("1) Rode primeiro")
+Diag:CreateButton({
+    Name = "Scanner do jogo (copia o resultado)",
+    Callback = function() Run("Scanner", ScanGame) end,
+})
+Diag:CreateSection("2) Depois")
+Diag:CreateButton({
+    Name = "Gravar remotes por 45s (faça as ações à mão)",
+    Callback = function() Run("Gravador", function() return RemoteLog(45) end) end,
+})
+Diag:CreateParagraph({
+    Title = "Dica",
+    Content = "Durante a gravação, faça a ação que quer automatizar (ex.: girar cartas/trait, carregar e vender uma caixa) e cole o resultado no chat.",
+})
+
+if game.PlaceId ~= EXPECTED_PLACE then
+    Notify("Atenção", "Este script foi feito para o PlaceId " .. EXPECTED_PLACE .. " (você está em " .. tostring(game.PlaceId) .. ")", 8)
+end
+print("[ACF] v2.1 carregado")
