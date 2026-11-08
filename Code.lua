@@ -84,7 +84,7 @@ local VANTA = (function()
         scale = 100, transparency = 0, density = "Confortável", animations = true,
         reduced = false, lowPower = false, diagnostics = true, avatar = true,
         notifications = true, notificationSeconds = 0, floatSize = 48, floatSide = "Esquerda",
-        refreshSeconds = 1, keybind = "RightShift",
+        refreshSeconds = 1, keybind = "RightShift", autoPlaceProfile = true, safeAimStartup = true,
     }
     local settings = table.clone(defaults)
     local bindings = {}
@@ -167,6 +167,8 @@ local VANTA = (function()
 
     local profiles = {Padrao = {values = {}}}
     local activeProfile = "Padrao"
+    local placeProfiles = {}
+    local placeKey = game.PlaceId and game.PlaceId > 0 and tostring(game.PlaceId) or nil
     local revision, slot = 0, 2
     local filesAvailable = type(readfile) == "function" and type(writefile) == "function"
     local dirty, saving, loading = false, false, false
@@ -189,7 +191,17 @@ local VANTA = (function()
             if not result[name] then return nil end
         end
         if not ProfileName(data.active) or not result[data.active] then return nil end
-        return {revision = rev, profiles = result, active = data.active}
+        local associations, placeCount = {}, 0
+        if type(data.places) == "table" then
+            for id, name in pairs(data.places) do
+                if placeCount < 64 and type(id) == "string" and id:match("^[1-9]%d*$")
+                    and #id <= 20 and type(name) == "string" and result[name] then
+                    associations[id], placeCount = name, placeCount + 1
+                end
+            end
+        end
+        return {revision = rev, profiles = result, active = data.active, places = associations,
+            autoPlace = data.autoPlace ~= false}
     end
 
     local function Snapshot()
@@ -206,6 +218,7 @@ local VANTA = (function()
         local nextSlot = 3 - slot
         local ok, encoded = pcall(HttpService.JSONEncode, HttpService, {
             schema = 1, revision = revision + 1, active = activeProfile, profiles = profiles,
+            places = placeProfiles, autoPlace = settings.autoPlaceProfile,
         })
         if ok then
             ok = pcall(writefile, SlotPath(nextSlot), encoded)
@@ -1891,6 +1904,10 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
         end
     end)
 
+    function Library:IsTabVisible(tab)
+        return visibleState and CurrentTab == tab
+    end
+
     function Library:CreateTab(name, icon)
         local index = #Library.Tabs + 1
         local y = 8 + (index - 1) * 46
@@ -2724,11 +2741,16 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
         UpdateScale()
     end
 
-    local function ApplyProfile(profile)
+    local startupAim = {Aimbot = true, SilentAim = true, AimKill = true}
+    local function ApplyProfile(profile, startup)
+        local safe = profile.values.safeAimStartup
+        if safe == nil then safe = defaults.safeAimStartup end
         loading = true
         for key, control in pairs(registered) do
             local value = profile.values[key]
             if value == nil then value = control.Default end
+            if key == "autoPlaceProfile" then value = settings.autoPlaceProfile end
+            if startup and safe and startupAim[key] then value = false end
             control.Set(value)
         end
         loading = false
@@ -2823,6 +2845,8 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
         Option(performance, "CreateToggle", "diagnostics", {Name = "Mostrar FPS e ping"})
         Option(performance, "CreateSlider", "refreshSeconds", {Name = "Intervalo do painel (s)", Min = 1, Max = 5})
 
+        Option(configuration, "CreateToggle", "autoPlaceProfile", {Name = "Carregar perfil vinculado ao iniciar"})
+        Option(configuration, "CreateToggle", "safeAimStartup", {Name = "Iniciar com funções de mira desligadas"})
         local profileStatus = configuration:CreateLabel("")
         local profileName = configuration:CreateInput({Name = "Nome do perfil", Default = "Padrao"})
         local transfer = configuration:CreateInput({Name = "JSON para importar / copiar", Multiline = true})
@@ -2830,7 +2854,9 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
             local names = {}
             for name in pairs(profiles) do table.insert(names, name) end
             table.sort(names)
-            profileStatus:Set("Ativo: " .. activeProfile .. "  |  " .. status .. "\n" .. table.concat(names, " · "))
+            local linked = placeKey and placeProfiles[placeKey] or "sem vínculo"
+            profileStatus:Set("Ativo: " .. activeProfile .. "  |  " .. status .. "\nJogo: " ..
+                (placeKey or "indisponível") .. "  |  Perfil: " .. linked .. "\n" .. table.concat(names, " · "))
         end
         self.RefreshProfileStatus = Refresh
         local function Commit()
@@ -2858,6 +2884,21 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
         end
 
         configuration:CreateButton({Name = "Salvar perfil ativo", Icon = "↓", Callback = Commit})
+        configuration:CreateButton({Name = "Vincular perfil ativo a este jogo", Icon = "+", Callback = function()
+            if not placeKey then Message("PlaceId indisponível.", "warning") return end
+            if not placeProfiles[placeKey] then
+                local count = 0
+                for _ in pairs(placeProfiles) do count = count + 1 end
+                if count >= 64 then Message("Limite de 64 jogos atingido.", "warning") return end
+            end
+            placeProfiles[placeKey] = activeProfile
+            Commit()
+        end})
+        configuration:CreateButton({Name = "Remover vínculo deste jogo", Icon = "×", Callback = function()
+            if not placeKey or not placeProfiles[placeKey] then return end
+            placeProfiles[placeKey] = nil
+            Commit()
+        end})
         configuration:CreateButton({Name = "Criar a partir do perfil ativo", Icon = "+", Callback = function()
             local name = Name()
             if not name or not CanAdd(name) then return end
@@ -2876,6 +2917,9 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
             local name = Name()
             if not name or not CanAdd(name, true) then return end
             profiles[name], profiles[activeProfile] = Snapshot(), nil
+            for id, linked in pairs(placeProfiles) do
+                if linked == activeProfile then placeProfiles[id] = name end
+            end
             Select(name)
         end})
         configuration:CreateButton({Name = "Excluir perfil pelo nome", Icon = "×", Callback = function()
@@ -2884,6 +2928,9 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
             if not profiles[name] then Message("Perfil não encontrado.", "warning") return end
             self:Confirm("Excluir perfil?", name, "Excluir", function()
                 profiles[name] = nil
+                for id, linked in pairs(placeProfiles) do
+                    if linked == name then placeProfiles[id] = nil end
+                end
                 if name == activeProfile then
                     local replacement = next(profiles)
                     if not replacement then
@@ -2927,9 +2974,11 @@ PVJ8XE6mEidNnvADAC2sMIoQWan3hfcu4vnL1P0MMYk/EC3l2zFfij5L/PGED0ACly7+f5vyTWUchBW0
             if second and (not first or second.revision > first.revision) then recovered = second end
             if recovered then
                 revision, slot = recovered.revision, recovered == first and 1 or 2
-                profiles, activeProfile = recovered.profiles, recovered.active
+                profiles, placeProfiles = recovered.profiles, recovered.places
+                settings.autoPlaceProfile = recovered.autoPlace
+                activeProfile = (settings.autoPlaceProfile and placeKey and placeProfiles[placeKey]) or recovered.active
                 status = "Perfis recuperados do dispositivo"
-                ApplyProfile(profiles[activeProfile])
+                ApplyProfile(profiles[activeProfile], true)
                 profileName:Set(activeProfile)
             else
                 status = "Nenhum perfil válido no dispositivo · aguardando gravação"
@@ -3057,6 +3106,7 @@ local Config = {
     ESPTracers = false,
     ESPNames = false,
     ESPHealth = false,
+    ESPRefreshMs = 150,
     ESPDistance = false,
 }
 
@@ -3270,12 +3320,56 @@ ESPSection:CreateSlider({ Key = "ESPOffsetY",
     Callback = function(v) Config.ESPOffsetY = v end
 })
 
+ESPSection:CreateSlider({
+    Key = "ESPRefreshMs", Name = "Intervalo dos dados ESP (ms)", Min = 50, Max = 500, Default = 150, Step = 25,
+    Callback = function(v) Config.ESPRefreshMs = v end,
+})
+
 local SettingsSection = TabSettings:CreateSection("Sistema & Extras")
 SettingsSection:CreateToggle({ Key = "FOVOutline", Name = "Mostrar círculos de FOV", Default = false, Callback = function(v) Config.FOVOutline = v end })
 SettingsSection:CreateButton({Name = "Descarregar Interface", Icon = "×", Callback = function()
     VANTA:Confirm("Descarregar VANTA?", "A sessão será encerrada.", "Descarregar", function() VANTA:Destroy() end)
 end})
+local DiagnosticsSection = TabSettings:CreateSection("Diagnóstico de combate", "Leituras locais · atualização a cada 250 ms")
+local SilentStatus = DiagnosticsSection:CreateLabel("Silent Aim · aguardando")
+local KillStatus = DiagnosticsSection:CreateLabel("Aim Kill · aguardando")
+local WallStatus = DiagnosticsSection:CreateLabel("Wall Check · aguardando")
+
 Window:BuildSettings(TabSettings)
+
+local diagnostics = {
+    silent = "Desligado", kill = "Desligado", methods = {}, redirected = 0, rejected = 0, skipped = 0,
+}
+local function RecordSilent(method, outcome)
+    diagnostics.methods[method] = true
+    diagnostics[outcome] = diagnostics[outcome] + 1
+end
+
+local diagnosticElapsed = 0
+Track(RunService.Heartbeat:Connect(function(dt)
+    if not Window:IsTabVisible(TabSettings) then return end
+    diagnosticElapsed = diagnosticElapsed + dt
+    if diagnosticElapsed < 0.25 then return end
+    diagnosticElapsed = 0
+    local methods = {}
+    for method in pairs(diagnostics.methods) do table.insert(methods, method) end
+    table.sort(methods)
+    local message = string.format("Silent Aim · %s\nMétodos observados: %s\nRedirecionamentos: %d · raios filtrados: %d · janelas fora da chance: %d",
+        diagnostics.silent, #methods > 0 and table.concat(methods, ", ") or "—",
+        diagnostics.redirected, diagnostics.rejected, diagnostics.skipped)
+    if diagnostics.rejectReason then message = message .. "\nÚltimo filtro: " .. diagnostics.rejectReason end
+    if env.VANTA_HOOKS_V2 and not env.VANTA_MOUSE_DIAGNOSTICS then
+        message = message .. "\nReinicie o Roblox para contabilizar Mouse.Hit/Target/UnitRay."
+    end
+    SilentStatus:Set(message)
+    KillStatus:Set("Aim Kill · " .. diagnostics.kill)
+    local wall = Config.WallCheck and "Nenhum bloqueio recente" or "Desligado"
+    if Config.WallCheck and diagnostics.wallAt and os.clock() - diagnostics.wallAt < 3 then
+        wall = "Bloqueio observado: " .. diagnostics.wall
+    end
+    local part = diagnostics.partAt and os.clock() - diagnostics.partAt < 0.5 and diagnostics.part
+    WallStatus:Set("Wall Check · " .. wall .. "\nParte selecionada: " .. (part or "—"))
+end))
 Window:Notify({Title = "VANTA 5.0", Description = "Interface pronta para uso.", Category = "success"})
 
 -- ==========================================
@@ -3326,7 +3420,11 @@ local function RaycastVisible(character, part)
         if hit:IsA("BasePart") and (hit.Transparency >= 0.8 or not hit.CanCollide or (result.Position - origin).Magnitude < 3) then
             table.insert(ignore, hit)
         else
-            if Config.DebugWall and os.clock() - lastDebug > 0.5 then
+            local now = os.clock()
+            if not diagnostics.wallAt or now - diagnostics.wallAt >= 0.25 then
+                diagnostics.wall, diagnostics.wallAt = hit:GetFullName(), now
+            end
+            if Config.DebugWall and now - lastDebug > 0.5 then
                 lastDebug = os.clock()
                 print("[VANTA Wall] bloqueado por:", hit:GetFullName(),
                     "| Transp:", hit.Transparency, "| CanCollide:", tostring(hit.CanCollide))
@@ -3492,18 +3590,24 @@ if HooksSupported and not env.VANTA_HOOKS_V2 then
         indexOk, oldIndex = pcall(hookmetamethod, game, "__index", nc(function(self, key)
             local S = env.VANTA_SILENT
             if S and S.Enabled and S.Pos and S.MouseHook and self == S.Mouse and not checkcaller() then
+                local result
                 if key == "Hit" then
-                    return CFrame.new(S.Pos)
+                    result = CFrame.new(S.Pos)
                 elseif key == "Target" then
-                    return S.Part
-                elseif key == "UnitRay" and S.UnitRay then
-                    return S.UnitRay
+                    result = S.Part
+                elseif key == "UnitRay" then
+                    result = S.UnitRay
+                end
+                if result then
+                    if S.Observe then S.Observe("Mouse." .. key, "redirected") end
+                    return result
                 end
             end
             return oldIndex(self, key)
         end))
         indexOk = indexOk and type(oldIndex) == "function"
         env.VANTA_INDEX_V2 = indexOk
+        if indexOk then env.VANTA_MOUSE_DIAGNOSTICS = true end
     end
     HooksSupported = namecallOk and indexOk
     env.VANTA_HOOKS_V2 = HooksSupported
@@ -3515,17 +3619,27 @@ end
 -- decide se um raio parece ser um tiro (e nao ground check, camera, etc.)
 local function ShouldRedirect(origin, direction)
     local camera = workspace.CurrentCamera
-    if not camera then return false end
-    if direction.Magnitude < Config.SilentMinRay then return false end
-    if (origin - camera.CFrame.Position).Magnitude > 60 then return false end
-    if direction.Unit:Dot(camera.CFrame.LookVector) < 0.2 then return false end
-    return true
+    if not camera then
+        diagnostics.rejectReason = "Câmera indisponível"
+    elseif direction.Magnitude < Config.SilentMinRay then
+        diagnostics.rejectReason = "Raio abaixo do mínimo"
+    elseif (origin - camera.CFrame.Position).Magnitude > 60 then
+        diagnostics.rejectReason = "Origem distante da câmera"
+    elseif direction.Unit:Dot(camera.CFrame.LookVector) < 0.2 then
+        diagnostics.rejectReason = "Raio fora da direção de tiro"
+    else
+        return true
+    end
+    return false
 end
 
 local function Retarget(origin, direction)
     local toTarget = Silent.Pos - origin
     local distance, range = toTarget.Magnitude, direction.Magnitude
-    if distance <= 1e-4 or distance > range then return nil end
+    if distance <= 1e-4 or distance > range then
+        diagnostics.rejectReason = distance > range and "Alvo fora do alcance do raio" or "Direção sem comprimento"
+        return nil
+    end
     return toTarget / distance * range
 end
 
@@ -3535,35 +3649,51 @@ local function Handler(self, method, oldNC, ...)
         if method == "Raycast" then
             if not Config.SilentRaycast then return nil end
             local origin, direction = ...
+            if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
+                diagnostics.rejectReason = "Argumentos incompatíveis"
+            end
             if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and ShouldRedirect(origin, direction) then
                 local redirected = Retarget(origin, direction)
-                if redirected then return table.pack(oldNC(self, origin, redirected, select(3, ...))) end
+                if redirected then
+                    RecordSilent(method, "redirected")
+                    return table.pack(oldNC(self, origin, redirected, select(3, ...)))
+                end
             end
+            RecordSilent(method, "rejected")
         elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
             if not Config.SilentFindPart then return nil end
             local ray = ...
+            if typeof(ray) ~= "Ray" then diagnostics.rejectReason = "Argumentos incompatíveis" end
             if typeof(ray) == "Ray" and ShouldRedirect(ray.Origin, ray.Direction) then
                 local redirected = Retarget(ray.Origin, ray.Direction)
                 if redirected then
+                    RecordSilent(method, "redirected")
                     return table.pack(oldNC(self, Ray.new(ray.Origin, redirected), select(2, ...)))
                 end
             end
+            RecordSilent(method, "rejected")
         end
     elseif self == Silent.Camera then
         if Config.SilentCameraRay and (method == "ViewportPointToRay" or method == "ScreenPointToRay") then
             local ray = oldNC(self, ...)
             local direction = Silent.Pos - ray.Origin
-            if direction.Magnitude <= 1e-4 then return table.pack(ray) end
+            if direction.Magnitude <= 1e-4 then
+                diagnostics.rejectReason = "Direção sem comprimento"
+                RecordSilent(method, "rejected")
+                return table.pack(ray)
+            end
+            RecordSilent(method, "redirected")
             return table.pack(Ray.new(ray.Origin, direction.Unit * ray.Direction.Magnitude))
         end
     elseif self == Silent.UIS then
         if Config.SilentMouseLoc and method == "GetMouseLocation" and Silent.ScreenPos then
+            RecordSilent(method, "redirected")
             return table.pack(Silent.ScreenPos)
         end
     end
     return nil
 end
-Silent.Handler = Handler
+Silent.Handler, Silent.Observe = Handler, RecordSilent
 
 local function ClearSilent()
     Silent.Enabled, Silent.Pos, Silent.Part, Silent.UnitRay, Silent.ScreenPos = false, nil, nil, nil, nil
@@ -3576,6 +3706,7 @@ local chanceUntil, chancePassed, lastChance = 0, false, nil
 
 local function UpdateSilent(camera, players)
     if not (Config.SilentAim and HooksSupported) then
+        diagnostics.silent = Config.SilentAim and "Hooks indisponíveis" or "Desligado"
         ClearSilent()
         silentLocked = nil
         chanceUntil = 0
@@ -3605,13 +3736,17 @@ local function UpdateSilent(camera, players)
         if now >= chanceUntil or lastChance ~= Config.SilentHitChance then
             chanceUntil, lastChance = now + 0.065, Config.SilentHitChance
             chancePassed = math.random(1, 100) <= lastChance
+            if not chancePassed then diagnostics.skipped = diagnostics.skipped + 1 end
         end
+        diagnostics.silent = chancePassed and "Alvo adquirido" or "Chance não atingida"
         local sp = camera:WorldToScreenPoint(pos)
         Silent.Pos, Silent.Part = pos, part
         Silent.UnitRay = Ray.new(origin, direction.Unit)
         Silent.ScreenPos = Vector2.new(sp.X, sp.Y)
         Silent.Enabled = chancePassed
+        diagnostics.part, diagnostics.partAt = part.Name, now
     else
+        diagnostics.silent = "Sem alvo elegível"
         ClearSilent()
     end
 end
@@ -3655,14 +3790,30 @@ local function Fire(want)
 
     local backend = method == "Tool" and tool or method
     if Kill.backend ~= backend then ReleaseFire() end
-    if Kill.release then return true end
+    if Kill.release then
+        diagnostics.kill = method .. " · gatilho pressionado"
+        return true
+    end
+    if method == "Tool" and not tool then
+        diagnostics.kill = "Tool · sem arma equipada"
+        return false
+    end
+    if tool and not tool.Enabled then
+        diagnostics.kill = "Tool · arma desabilitada"
+        return false
+    end
 
     local now = os.clock()
-    if now - Kill.last < Config.FireDelay then return false end
+    if now - Kill.last < Config.FireDelay then
+        diagnostics.kill = method .. " · aguardando intervalo"
+        return false
+    end
     Kill.last = now
+    diagnostics.kill = method .. " · acionando"
     if method == "Tool" and tool and tool.Enabled then
         local ok = pcall(tool.Activate, tool)
-        if ok then pcall(tool.Deactivate, tool) end
+        if ok then pcall(tool.Deactivate, tool)
+        else diagnostics.kill = "Tool · ativação falhou" end
         return ok
     elseif method == "Mouse" then
         if type(mouse1press) == "function" and type(mouse1release) == "function" then
@@ -3671,7 +3822,7 @@ local function Fire(want)
                 return true
             end
         end
-        if type(mouse1click) == "function" then return pcall(mouse1click) end
+        if type(mouse1click) == "function" and pcall(mouse1click) then return true end
     elseif method == "VIM" and VIM then
         local camera = workspace.CurrentCamera
         if not camera then return false end
@@ -3683,6 +3834,7 @@ local function Fire(want)
             return true
         end
     end
+    diagnostics.kill = method .. " · método indisponível ou falhou"
     return false
 end
 
@@ -3698,11 +3850,13 @@ local function AimStep(dt)
     local killOn = Config.AimKill and (not Config.KillHold or holding)
 
     if not killOn then
+        diagnostics.kill = Config.AimKill and "Aguardando botão AIM" or "Desligado"
         Fire(false)
         Kill.humanoid = nil
     end
     if not (aimbotOn or killOn or (Config.SilentAim and HooksSupported)) then
         lockedPlayer, silentLocked = nil, nil
+        diagnostics.silent = Config.SilentAim and "Hooks indisponíveis" or "Desligado"
         ClearSilent()
         chanceUntil = 0
         return
@@ -3712,6 +3866,8 @@ local function AimStep(dt)
     local character = LocalPlayer.Character
     local localHumanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not camera or not localHumanoid or localHumanoid.Health <= 0 then
+        if killOn then diagnostics.kill = "Sem câmera ou personagem ativo" end
+        if Config.SilentAim then diagnostics.silent = "Sem câmera ou personagem ativo" end
         Fire(false)
         ClearSilent()
         lockedPlayer, silentLocked, Kill.humanoid = nil, nil, nil
@@ -3740,6 +3896,7 @@ local function AimStep(dt)
         end
     end
     if killOn and now < Kill.switchUntil then
+        diagnostics.kill = "Aguardando troca de alvo"
         Fire(false)
         return
     end
@@ -3747,11 +3904,13 @@ local function AimStep(dt)
     local player, part, humanoid = FindTarget(Config.FOV, lockedPlayer, Config.TargetPart, players)
     lockedPlayer = player
     if not part then
+        if killOn then diagnostics.kill = "Sem alvo elegível" end
         Fire(false)
         Kill.humanoid = nil
         return
     end
 
+    diagnostics.part, diagnostics.partAt = part.Name, now
     local origin = camera.CFrame.Position
     local pos = AimPosition(part)
     local direction = pos - origin
@@ -3765,13 +3924,17 @@ local function AimStep(dt)
     end
 
     if killOn then
-        if Silent.Part and Silent.Part.Parent ~= humanoid.Parent then Silent.Enabled = false end
+        if Silent.Enabled and Silent.Part and Silent.Part.Parent ~= humanoid.Parent then
+            Silent.Enabled = false
+            diagnostics.silent = "Em espera · alvo diferente do Aim Kill"
+        end
         if Kill.humanoid and Kill.humanoid ~= humanoid then Kill.humanoid = nil end
         local aligned = Config.Smoothness <= 1
             or camera.CFrame.LookVector:Dot(direction.Unit) >= math.cos(math.rad(Config.KillAlign))
         if aligned then
             if Fire(true) then Kill.humanoid = humanoid end
         else
+            diagnostics.kill = "Alinhando mira"
             Fire(false)
         end
     end
@@ -3788,7 +3951,7 @@ VANTA.ScreenGui.Destroying:Connect(function()
     Config.Aimbot, Config.AimKill, Config.SilentAim = false, false, false
     pcall(function() Fire(false) end)
     ClearSilent()
-    if Silent.Handler == Handler then Silent.Handler = nil end
+    if Silent.Handler == Handler then Silent.Handler, Silent.Observe = nil, nil end
     if env.VANTA_INSTANCE == VANTA then env.VANTA_INSTANCE = nil end
 end)
 
@@ -3819,6 +3982,7 @@ end
 
 local ESP = {}
 local espWasOn = false
+local healthGreen = Color3.fromRGB(70, 190, 120)
 
 local function NewESP()
     local d = {}
@@ -3847,13 +4011,15 @@ local function NewESP()
 end
 
 local function HideESP(d)
-    for _, o in pairs(d) do o.Visible = false end
+    d.box.Visible, d.tracer.Visible, d.name.Visible = false, false, false
+    d.hpBg.Visible, d.hpFill.Visible = false, false
+    d.nextRefresh = 0
 end
 
 local function RemoveESP(player)
     local d = ESP[player]
     if d then
-        for _, o in pairs(d) do
+        for _, o in ipairs({d.box, d.tracer, d.name, d.hpBg, d.hpFill}) do
             pcall(function() o:Remove() end)
             VANTA.UntrackDrawing(o)
         end
@@ -3901,6 +4067,9 @@ Track(RunService.RenderStepped:Connect(function()
         return
     end
     espWasOn = true
+    local now = os.clock()
+    local mode = (Config.ESPNames and 1 or 0) + (Config.ESPDistance and 2 or 0) + (Config.ESPHealth and 4 or 0)
+    local refresh = Config.ESPRefreshMs / 1000
 
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
@@ -3943,26 +4112,32 @@ Track(RunService.RenderStepped:Connect(function()
                             d.tracer.To = Vector2.new(pos.X, posY + height)
                         end
 
-                        local text = ""
-                        if Config.ESPNames then text = player.DisplayName or player.Name end
-                        if Config.ESPDistance then
-                            text = text .. string.format(" [%dm]", math.floor((root.Position - camera.CFrame.Position).Magnitude))
-                        end
-                        d.name.Visible = text ~= ""
-                        if text ~= "" then
-                            d.name.Text = text
-                            d.name.Position = Vector2.new(pos.X, posY - 18)
+                        if d.humanoid ~= humanoid or d.mode ~= mode or d.refresh ~= refresh or now >= d.nextRefresh then
+                            d.humanoid, d.mode, d.refresh, d.nextRefresh = humanoid, mode, refresh, now + refresh
+                            local text = Config.ESPNames and (player.DisplayName or player.Name) or ""
+                            if Config.ESPDistance then
+                                text = text .. string.format(" [%dm]", math.floor((root.Position - camera.CFrame.Position).Magnitude))
+                            end
+                            d.hasText = text ~= ""
+                            if d.hasText then d.name.Text = text end
+                            d.health = nil
+                            if Config.ESPHealth and humanoid.MaxHealth > 0 then
+                                d.health = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+                                d.hpFill.Color = ACCENT:Lerp(healthGreen, d.health)
+                            end
                         end
 
-                        if Config.ESPHealth and humanoid.MaxHealth > 0 then
-                            local pct = math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1)
+                        d.name.Visible = d.hasText
+                        if d.hasText then d.name.Position = Vector2.new(pos.X, posY - 18) end
+
+                        if d.health then
+                            local pct = d.health
                             local inner = height * pct
                             d.hpBg.Visible, d.hpFill.Visible = true, true
                             d.hpBg.Size = Vector2.new(3.5, height + 2)
                             d.hpBg.Position = Vector2.new(posX - 7, posY - 1)
                             d.hpFill.Size = Vector2.new(1.5, inner)
                             d.hpFill.Position = Vector2.new(posX - 6, posY + (height - inner))
-                            d.hpFill.Color = ACCENT:Lerp(Color3.fromRGB(70, 190, 120), pct)
                         else
                             d.hpBg.Visible, d.hpFill.Visible = false, false
                         end
