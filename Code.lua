@@ -2999,7 +2999,6 @@ end
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local GuiService = game:GetService("GuiService")
 local LocalPlayer = Players.LocalPlayer
 local env = (getgenv and getgenv()) or _G
 local ACCENT = Color3.fromRGB(190, 35, 55)
@@ -3216,7 +3215,7 @@ SilentSection:CreateSlider({ Key = "SilentFOV",
     Callback = function(v) Config.SilentFOV = v end
 })
 SilentSection:CreateSlider({ Key = "SilentHitChance",
-    Name = "Hit Chance %", Min = 1, Max = 100, Default = 100, Step = 1,
+    Name = "Chance de redirecionamento (%)", Min = 1, Max = 100, Default = 100, Step = 1,
     Callback = function(v) Config.SilentHitChance = v end
 })
 SilentSection:CreateSlider({ Key = "SilentMinRay",
@@ -3244,7 +3243,7 @@ KillSection:CreateDropdown({ Key = "KillMethod",
     Callback = function(v) Config.KillMethod = v end
 })
 KillSection:CreateSlider({ Key = "FireDelay",
-    Name = "Intervalo entre tiros (s) [Tool]", Min = 0.03, Max = 1, Default = 0.1, Step = 0.01,
+    Name = "Intervalo (Tool / clique) em segundos", Min = 0.03, Max = 1, Default = 0.1, Step = 0.01,
     Callback = function(v) Config.FireDelay = v end
 })
 KillSection:CreateSlider({ Key = "KillAlign",
@@ -3256,8 +3255,8 @@ KillSection:CreateSlider({ Key = "KillSwitchDelay",
     Callback = function(v) Config.KillSwitchDelay = v end
 })
 KillSection:CreateToggle({ Key = "AutoEquip", Name = "Equipar arma automaticamente", Default = true, Callback = function(v) Config.AutoEquip = v end })
-KillSection:CreateToggle({ Key = "KillNotify", Name = "Avisar a cada kill", Default = true, Callback = function(v) Config.KillNotify = v end })
-local KillLabel = KillSection:CreateLabel("Kills nesta sessão: 0")
+KillSection:CreateToggle({ Key = "KillNotify", Name = "Avisar ao observar abate", Default = true, Callback = function(v) Config.KillNotify = v end })
+local KillLabel = KillSection:CreateLabel("Abates observados: 0")
 
 -- ESP
 local ESPSection = TabESP:CreateSection("ESP & Markers")
@@ -3288,9 +3287,13 @@ local VisCache = {}
 local function BeginFrame()
     table.clear(FrameChars)
     table.clear(VisCache)
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then table.insert(FrameChars, p.Character) end
+    local players = Players:GetPlayers()
+    if Config.WallCheck then
+        for _, p in ipairs(players) do
+            if p ~= LocalPlayer and p.Character then table.insert(FrameChars, p.Character) end
+        end
     end
+    return players
 end
 
 local lastDebug = 0
@@ -3320,7 +3323,7 @@ local function RaycastVisible(character, part)
         if hit:IsDescendantOf(character) then return true end
 
         -- atravessa: invisivel, sem colisao ou colado na camera (viewmodel)
-        if hit.Transparency >= 0.8 or not hit.CanCollide or (result.Position - origin).Magnitude < 3 then
+        if hit:IsA("BasePart") and (hit.Transparency >= 0.8 or not hit.CanCollide or (result.Position - origin).Magnitude < 3) then
             table.insert(ignore, hit)
         else
             if Config.DebugWall and os.clock() - lastDebug > 0.5 then
@@ -3408,6 +3411,14 @@ local function Evaluate(player, camera, center, origin, fov, pref)
     local part = PickPart(character, list)
     if not part then return nil end
 
+    if part ~= first then
+        local projected = camera:WorldToViewportPoint(part.Position)
+        if projected.Z <= 0 then return nil end
+        pixel = (Vector2.new(projected.X, projected.Y) - center).Magnitude
+        dist3d = (part.Position - origin).Magnitude
+        if (fov < 1000 and pixel > fov) or dist3d > Config.MaxDistance then return nil end
+    end
+
     local score = pixel
     if Config.Priority == "Distance" then
         score = dist3d
@@ -3418,7 +3429,7 @@ local function Evaluate(player, camera, center, origin, fov, pref)
 end
 
 -- devolve jogador, parte, humanoid
-local function FindTarget(fov, locked, pref)
+local function FindTarget(fov, locked, pref, players)
     local camera = workspace.CurrentCamera
     if not camera then return nil end
     local viewport = camera.ViewportSize
@@ -3431,7 +3442,7 @@ local function FindTarget(fov, locked, pref)
     end
 
     local bestPlayer, bestPart, bestHumanoid, bestScore = nil, nil, nil, math.huge
-    for _, p in ipairs(Players:GetPlayers()) do
+    for _, p in ipairs(players) do
         local part, score, humanoid = Evaluate(p, camera, center, origin, fov, pref)
         if part and score < bestScore then
             bestPlayer, bestPart, bestHumanoid, bestScore = p, part, humanoid, score
@@ -3452,41 +3463,53 @@ Silent.Mouse = LocalPlayer:GetMouse()
 Silent.UIS = UserInputService
 Silent.MouseHook = true
 
-local HooksSupported = (hookmetamethod ~= nil) and (getnamecallmethod ~= nil) and (checkcaller ~= nil)
+local HooksSupported = type(hookmetamethod) == "function" and type(getnamecallmethod) == "function" and type(checkcaller) == "function"
 
 if HooksSupported and not env.VANTA_HOOKS_V2 then
-    env.VANTA_HOOKS_V2 = true
     local nc = newcclosure or function(f) return f end
 
     local oldNamecall
-    oldNamecall = hookmetamethod(game, "__namecall", nc(function(self, ...)
-        local S = env.VANTA_SILENT
-        if S and S.Enabled and S.Pos and S.Handler and not checkcaller() then
-            local method = getnamecallmethod()
-            if self == workspace or self == S.Camera or self == S.UIS then
-                local out = S.Handler(self, method, oldNamecall, ...)
-                if out then return table.unpack(out, 1, out.n) end
+    local namecallOk = env.VANTA_NAMECALL_V2 == true
+    if not namecallOk then
+        namecallOk, oldNamecall = pcall(hookmetamethod, game, "__namecall", nc(function(self, ...)
+            local S = env.VANTA_SILENT
+            if S and S.Enabled and S.Pos and S.Handler and not checkcaller() then
+                local method = getnamecallmethod()
+                if self == workspace or self == S.Camera or self == S.UIS then
+                    local out = S.Handler(self, method, oldNamecall, ...)
+                    if out then return table.unpack(out, 1, out.n) end
+                end
             end
-        end
-        return oldNamecall(self, ...)
-    end))
+            return oldNamecall(self, ...)
+        end))
+        namecallOk = namecallOk and type(oldNamecall) == "function"
+        env.VANTA_NAMECALL_V2 = namecallOk
+    end
 
     local oldIndex
-    oldIndex = hookmetamethod(game, "__index", nc(function(self, key)
-        local S = env.VANTA_SILENT
-        if S and S.Enabled and S.Pos and S.MouseHook and self == S.Mouse and not checkcaller() then
-            if key == "Hit" then
-                return CFrame.new(S.Pos)
-            elseif key == "Target" then
-                return S.Part
-            elseif key == "UnitRay" and S.UnitRay then
-                return S.UnitRay
+    local indexOk = env.VANTA_INDEX_V2 == true
+    if not indexOk then
+        indexOk, oldIndex = pcall(hookmetamethod, game, "__index", nc(function(self, key)
+            local S = env.VANTA_SILENT
+            if S and S.Enabled and S.Pos and S.MouseHook and self == S.Mouse and not checkcaller() then
+                if key == "Hit" then
+                    return CFrame.new(S.Pos)
+                elseif key == "Target" then
+                    return S.Part
+                elseif key == "UnitRay" and S.UnitRay then
+                    return S.UnitRay
+                end
             end
-        end
-        return oldIndex(self, key)
-    end))
-elseif not HooksSupported then
-    VANTA:Notify({ Title = "Silent Aim", Description = "Executor sem hookmetamethod: Silent Aim indisponível.", Duration = 5 })
+            return oldIndex(self, key)
+        end))
+        indexOk = indexOk and type(oldIndex) == "function"
+        env.VANTA_INDEX_V2 = indexOk
+    end
+    HooksSupported = namecallOk and indexOk
+    env.VANTA_HOOKS_V2 = HooksSupported
+end
+if not HooksSupported then
+    VANTA:Notify({Title = "Silent Aim", Description = "Hooks indisponíveis ou instalação incompleta.", Category = "warning", Duration = 5})
 end
 
 -- decide se um raio parece ser um tiro (e nao ground check, camera, etc.)
@@ -3496,13 +3519,14 @@ local function ShouldRedirect(origin, direction)
     if direction.Magnitude < Config.SilentMinRay then return false end
     if (origin - camera.CFrame.Position).Magnitude > 60 then return false end
     if direction.Unit:Dot(camera.CFrame.LookVector) < 0.2 then return false end
-    return math.random(1, 100) <= Config.SilentHitChance
+    return true
 end
 
 local function Retarget(origin, direction)
     local toTarget = Silent.Pos - origin
-    local length = math.max(direction.Magnitude, toTarget.Magnitude * 1.05 + 1)
-    return toTarget.Unit * length
+    local distance, range = toTarget.Magnitude, direction.Magnitude
+    if distance <= 1e-4 or distance > range then return nil end
+    return toTarget / distance * range
 end
 
 -- devolve uma tabela empacotada (table.pack) quando tratou a chamada
@@ -3512,23 +3536,25 @@ local function Handler(self, method, oldNC, ...)
             if not Config.SilentRaycast then return nil end
             local origin, direction = ...
             if typeof(origin) == "Vector3" and typeof(direction) == "Vector3" and ShouldRedirect(origin, direction) then
-                return table.pack(oldNC(self, origin, Retarget(origin, direction), select(3, ...)))
+                local redirected = Retarget(origin, direction)
+                if redirected then return table.pack(oldNC(self, origin, redirected, select(3, ...))) end
             end
         elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
             if not Config.SilentFindPart then return nil end
             local ray = ...
             if typeof(ray) == "Ray" and ShouldRedirect(ray.Origin, ray.Direction) then
-                local newRay = Ray.new(ray.Origin, Retarget(ray.Origin, ray.Direction))
-                return table.pack(oldNC(self, newRay, select(2, ...)))
+                local redirected = Retarget(ray.Origin, ray.Direction)
+                if redirected then
+                    return table.pack(oldNC(self, Ray.new(ray.Origin, redirected), select(2, ...)))
+                end
             end
         end
     elseif self == Silent.Camera then
         if Config.SilentCameraRay and (method == "ViewportPointToRay" or method == "ScreenPointToRay") then
-            if math.random(1, 100) <= Config.SilentHitChance then
-                local ray = oldNC(self, ...)
-                local origin = ray.Origin
-                return table.pack(Ray.new(origin, (Silent.Pos - origin).Unit * ray.Direction.Magnitude))
-            end
+            local ray = oldNC(self, ...)
+            local direction = Silent.Pos - ray.Origin
+            if direction.Magnitude <= 1e-4 then return table.pack(ray) end
+            return table.pack(Ray.new(ray.Origin, direction.Unit * ray.Direction.Magnitude))
         end
     elseif self == Silent.UIS then
         if Config.SilentMouseLoc and method == "GetMouseLocation" and Silent.ScreenPos then
@@ -3546,10 +3572,13 @@ end
 local silentLocked = nil
 local silentNextRoll, silentRollHead = 0, true
 
-local function UpdateSilent(camera)
+local chanceUntil, chancePassed, lastChance = 0, false, nil
+
+local function UpdateSilent(camera, players)
     if not (Config.SilentAim and HooksSupported) then
         ClearSilent()
         silentLocked = nil
+        chanceUntil = 0
         return
     end
 
@@ -3562,7 +3591,7 @@ local function UpdateSilent(camera)
         pref = silentRollHead and "Head" or "Peito"
     end
 
-    local player, part = FindTarget(Config.SilentFOV, silentLocked, pref)
+    local player, part = FindTarget(Config.SilentFOV, silentLocked, pref, players)
     silentLocked = player
     Silent.MouseHook = Config.SilentMouse
     Silent.Camera = camera
@@ -3570,11 +3599,18 @@ local function UpdateSilent(camera)
     if part then
         local pos = AimPosition(part)
         local origin = camera.CFrame.Position
-        local sp = camera:WorldToViewportPoint(pos)
+        local direction = pos - origin
+        if direction.Magnitude <= 1e-4 then ClearSilent() return end
+        local now = os.clock()
+        if now >= chanceUntil or lastChance ~= Config.SilentHitChance then
+            chanceUntil, lastChance = now + 0.065, Config.SilentHitChance
+            chancePassed = math.random(1, 100) <= lastChance
+        end
+        local sp = camera:WorldToScreenPoint(pos)
         Silent.Pos, Silent.Part = pos, part
-        Silent.UnitRay = Ray.new(origin, (pos - origin).Unit)
-        Silent.ScreenPos = Vector2.new(sp.X, sp.Y + GuiService:GetGuiInset().Y)
-        Silent.Enabled = true
+        Silent.UnitRay = Ray.new(origin, direction.Unit)
+        Silent.ScreenPos = Vector2.new(sp.X, sp.Y)
+        Silent.Enabled = chancePassed
     else
         ClearSilent()
     end
@@ -3583,14 +3619,12 @@ end
 -- ==========================================
 -- AIM KILL (disparo)
 -- ==========================================
-local Kill = { last = 0, down = false, humanoid = nil, counted = false, switchUntil = 0, kills = 0, lastEquip = 0 }
+local Kill = {last = -math.huge, lastEquip = -math.huge, switchUntil = 0, kills = 0}
 
-local function PressMouse(down)
-    if down then
-        if mouse1press then pcall(mouse1press) elseif mouse1click then pcall(mouse1click) end
-    elseif mouse1release then
-        pcall(mouse1release)
-    end
+local function ReleaseFire()
+    local release = Kill.release
+    Kill.release, Kill.backend = nil, nil
+    if release then pcall(release) end
 end
 
 local function ResolveTool()
@@ -3602,34 +3636,54 @@ local function ResolveTool()
         local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
         local humanoid = character:FindFirstChildOfClass("Humanoid")
         local candidate = backpack and backpack:FindFirstChildOfClass("Tool")
-        if candidate and humanoid then pcall(function() humanoid:EquipTool(candidate) end) end
+        if candidate and humanoid then
+            pcall(humanoid.EquipTool, humanoid, candidate)
+            tool = character:FindFirstChildOfClass("Tool")
+        end
     end
     return tool
 end
 
 local function Fire(want)
+    if not want then ReleaseFire() return false end
     local method = Config.KillMethod
-    local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
-    if method == "Auto" then method = tool and "Tool" or "Mouse" end
+    local tool
+    if method == "Auto" or method == "Tool" then
+        tool = ResolveTool()
+        if method == "Auto" then method = tool and "Tool" or "Mouse" end
+    end
 
-    if method == "Tool" then
-        if want and tool and os.clock() - Kill.last >= Config.FireDelay then
-            Kill.last = os.clock()
-            pcall(function() tool:Activate() end)
+    local backend = method == "Tool" and tool or method
+    if Kill.backend ~= backend then ReleaseFire() end
+    if Kill.release then return true end
+
+    local now = os.clock()
+    if now - Kill.last < Config.FireDelay then return false end
+    Kill.last = now
+    if method == "Tool" and tool and tool.Enabled then
+        local ok = pcall(tool.Activate, tool)
+        if ok then pcall(tool.Deactivate, tool) end
+        return ok
+    elseif method == "Mouse" then
+        if type(mouse1press) == "function" and type(mouse1release) == "function" then
+            if pcall(mouse1press) then
+                Kill.backend, Kill.release = backend, mouse1release
+                return true
+            end
         end
-        return
-    end
-
-    -- Mouse / VIM: mantem o botao pressionado enquanto houver alvo
-    if Kill.down == want then return end
-    Kill.down = want
-    if method == "VIM" and VIM then
+        if type(mouse1click) == "function" then return pcall(mouse1click) end
+    elseif method == "VIM" and VIM then
         local camera = workspace.CurrentCamera
-        local viewport = camera and camera.ViewportSize or Vector2.new(400, 300)
-        pcall(function() VIM:SendMouseButtonEvent(viewport.X / 2, viewport.Y / 2, 0, want, game, 0) end)
-    else
-        PressMouse(want)
+        if not camera then return false end
+        local x, y = camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2
+        local function Send(down) VIM:SendMouseButtonEvent(x, y, 0, down, game, 0) end
+        if pcall(Send, true) then
+            Kill.backend = backend
+            Kill.release = function() Send(false) end
+            return true
+        end
     end
+    return false
 end
 
 -- ==========================================
@@ -3643,35 +3697,46 @@ local function AimStep(dt)
     local aimbotOn = Config.Aimbot and (not Config.HoldToAim or holding)
     local killOn = Config.AimKill and (not Config.KillHold or holding)
 
-    if not (aimbotOn or killOn or Config.SilentAim) then
+    if not killOn then
+        Fire(false)
+        Kill.humanoid = nil
+    end
+    if not (aimbotOn or killOn or (Config.SilentAim and HooksSupported)) then
         lockedPlayer, silentLocked = nil, nil
         ClearSilent()
-        Fire(false)
+        chanceUntil = 0
         return
     end
 
     local camera = workspace.CurrentCamera
-    if not camera then return end
+    local character = LocalPlayer.Character
+    local localHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not camera or not localHumanoid or localHumanoid.Health <= 0 then
+        Fire(false)
+        ClearSilent()
+        lockedPlayer, silentLocked, Kill.humanoid = nil, nil, nil
+        return
+    end
 
-    BeginFrame()
-    UpdateSilent(camera)
+    local players = BeginFrame()
+    UpdateSilent(camera, players)
 
     if not (aimbotOn or killOn) then
         lockedPlayer = nil
-        Fire(false)
         return
     end
 
     -- contagem de kills + atraso antes do proximo alvo
     local now = os.clock()
-    if killOn and Kill.humanoid and Kill.humanoid.Parent and Kill.humanoid.Health <= 0 and not Kill.counted then
-        Kill.counted = true
+    if killOn and Kill.humanoid and Kill.humanoid.Parent and Kill.humanoid.Health <= 0 then
+        local targetName = Kill.humanoid.Parent.Name
+        Kill.humanoid = nil
         Kill.kills = Kill.kills + 1
-        KillLabel:Set("Kills nesta sessão: " .. Kill.kills)
+        KillLabel:Set("Abates observados: " .. Kill.kills)
         Kill.switchUntil = now + Config.KillSwitchDelay / 1000
         lockedPlayer = nil
         if Config.KillNotify then
-            VANTA:Notify({ Title = "Aim Kill", Description = "Kill #" .. Kill.kills .. " - " .. tostring(Kill.humanoid.Parent.Name), Duration = 1.5 })
+            VANTA:Notify({ Title = "Aim Kill", Description = "Alvo abatido #" .. Kill.kills .. " · " .. targetName, Duration = 1.5 })
         end
     end
     if killOn and now < Kill.switchUntil then
@@ -3679,15 +3744,18 @@ local function AimStep(dt)
         return
     end
 
-    local player, part, humanoid = FindTarget(Config.FOV, lockedPlayer, Config.TargetPart)
+    local player, part, humanoid = FindTarget(Config.FOV, lockedPlayer, Config.TargetPart, players)
     lockedPlayer = player
     if not part then
-        if killOn then Fire(false) end
+        Fire(false)
+        Kill.humanoid = nil
         return
     end
 
     local origin = camera.CFrame.Position
     local pos = AimPosition(part)
+    local direction = pos - origin
+    if direction.Magnitude <= 1e-4 then Fire(false) return end
     local goal = CFrame.new(origin, pos)
 
     if Config.Smoothness <= 1 then
@@ -3697,19 +3765,15 @@ local function AimStep(dt)
     end
 
     if killOn then
-        if humanoid ~= Kill.humanoid then
-            Kill.humanoid, Kill.counted = humanoid, false
-        end
+        if Silent.Part and Silent.Part.Parent ~= humanoid.Parent then Silent.Enabled = false end
+        if Kill.humanoid and Kill.humanoid ~= humanoid then Kill.humanoid = nil end
         local aligned = Config.Smoothness <= 1
-            or camera.CFrame.LookVector:Dot((pos - origin).Unit) >= math.cos(math.rad(Config.KillAlign))
+            or camera.CFrame.LookVector:Dot(direction.Unit) >= math.cos(math.rad(Config.KillAlign))
         if aligned then
-            ResolveTool()
-            Fire(true)
+            if Fire(true) then Kill.humanoid = humanoid end
         else
             Fire(false)
         end
-    else
-        Fire(false)
     end
 end
 
@@ -3767,7 +3831,10 @@ local function NewESP()
     end)
     for _, o in pairs(d) do VANTA.TrackDrawing(o) end
     if not ok then
-        for _, o in pairs(d) do pcall(function() o:Remove() end) end
+        for _, o in pairs(d) do
+            pcall(function() o:Remove() end)
+            VANTA.UntrackDrawing(o)
+        end
         return false
     end
     d.box.Color, d.box.Thickness, d.box.Filled = ACCENT, 1.2, false
