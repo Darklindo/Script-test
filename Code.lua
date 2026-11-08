@@ -1,5 +1,5 @@
 -- ============================================================================
--- VANTA 4.1 Crimson Obsidian Edition (interface estilo Ronix)
+-- VANTA 5.0 · Crimson Obsidian
 -- Target: Universal Mobile Environment (Delta / Codex / Arceus X)
 -- Compiler: Luau VM
 -- ============================================================================
@@ -27,6 +27,7 @@ local VANTA = (function()
     Library.Drawings = {}
     Library.Tabs = {}
     Library.Destroyed = false
+    Library.ThemeObservers = {}
 
     local Theme = {
         Background = Color3.fromRGB(13, 13, 17),
@@ -67,20 +68,226 @@ local VANTA = (function()
         end
     end
 
+    local HttpService = game:GetService("HttpService")
+    local palette = {
+        ["Crimson Obsidian"] = {0x101016, 0xB73350, 0x643044, 0xF17C91},
+        ["Midnight Blue"] = {0x0C1220, 0x3460A0, 0x283F68, 0x8FB9FF},
+        Emerald = {0x0C1815, 0x217C61, 0x26594D, 0x78E4BB},
+        Amethyst = {0x151020, 0x7950A4, 0x4D3569, 0xD8A9FF},
+        Cyberpunk = {0x0C141D, 0x147D8C, 0x73396A, 0xF69CDB},
+        ["Pure Black"] = {0x000000, 0x53535F, 0x32323A, 0xD1D1DB},
+        Arctic = {0x17222B, 0x426C86, 0x3C5566, 0xABE2FF},
+    }
+    local themeNames = {"Crimson Obsidian", "Midnight Blue", "Emerald", "Amethyst", "Cyberpunk", "Pure Black", "Arctic"}
+    local defaults = {
+        theme = themeNames[1], primary = "", secondary = "", highlight = "",
+        scale = 100, transparency = 0, density = "Confortável", animations = true,
+        reduced = false, lowPower = false, diagnostics = true, avatar = true,
+        notifications = true, notificationSeconds = 0, floatSize = 48, floatSide = "Esquerda",
+        refreshSeconds = 1, keybind = "RightShift",
+    }
+    local settings = table.clone(defaults)
+    local bindings = {}
+    local function Bind(object, property, resolver)
+        bindings[object] = bindings[object] or {}
+        bindings[object][property] = resolver
+        object[property] = resolver()
+    end
+
+    local function Hex(value)
+        if type(value) ~= "string" then return nil end
+        local digits = value:match("^#?(%x%x%x%x%x%x)$")
+        return digits and digits:upper()
+    end
+
+    local function Color(value)
+        return Color3.fromRGB(math.floor(value / 65536), math.floor(value / 256) % 256, value % 256)
+    end
+
+    local function ResolvePalette()
+        local values = palette[settings.theme]
+        local background = Color(values[1])
+        local white = Color3.new(1, 1, 1)
+        Theme.Background = background
+        Theme.Surface = background:Lerp(white, 0.035)
+        Theme.Surface2 = background:Lerp(white, 0.07)
+        Theme.Surface3 = background:Lerp(white, 0.12)
+        Theme.Border = background:Lerp(white, 0.17)
+        Theme.Accent = Color(tonumber(settings.primary, 16) or values[2])
+        Theme.AccentDark = Color(tonumber(settings.secondary, 16) or values[3])
+        Theme.Accent2 = Color(tonumber(settings.highlight, 16) or values[4])
+    end
+
+    local registered = {}
+    local function ValidateOption(key, value)
+        local default = defaults[key]
+        if type(value) ~= type(default) then return nil end
+        if key == "theme" then return palette[value] and value end
+        if key == "primary" or key == "secondary" or key == "highlight" then
+            return value == "" and "" or Hex(value)
+        end
+        if key == "density" then return (value == "Compacta" or value == "Confortável") and value end
+        if key == "floatSide" then return (value == "Esquerda" or value == "Direita") and value end
+        if key == "keybind" then
+            local ok, item = pcall(function() return Enum.KeyCode[value] end)
+            return ok and item and item ~= Enum.KeyCode.Unknown and value or nil
+        end
+        local control = registered[key]
+        if control then return control.Validate(value) end
+        if type(default) == "boolean" then return value end
+        return nil
+    end
+
+    local function ProfileName(value)
+        return type(value) == "string" and #value <= 32 and value:match("^[%w][%w _%-]*$") and value
+    end
+
+    local function Decode(raw)
+        if type(raw) ~= "string" or #raw > 65536 then return nil end
+        local ok, decoded = pcall(HttpService.JSONDecode, HttpService, raw)
+        return ok and type(decoded) == "table" and decoded or nil
+    end
+
+    local function ValidateProfile(data, strict)
+        if type(data) ~= "table" or type(data.values) ~= "table" then return nil end
+        local profile = {values = {}}
+        for key, value in pairs(data.values) do
+            local clean
+            if defaults[key] ~= nil then clean = ValidateOption(key, value)
+            elseif registered[key] then clean = registered[key].Validate(value) end
+            if clean ~= nil then profile.values[key] = clean
+            elseif strict then return nil end
+        end
+        return profile
+    end
+
+    local profiles = {Padrao = {values = {}}}
+    local activeProfile = "Padrao"
+    local revision, slot = 0, 2
+    local filesAvailable = type(readfile) == "function" and type(writefile) == "function"
+    local dirty, saving, loading = false, false, false
+    local status = filesAvailable and "Armazenamento disponível" or "Somente memória nesta sessão"
+    local function SlotPath(index)
+        return "VANTA5-profiles-" .. index .. ".json"
+    end
+
+    local function ReadSlot(index)
+        local ok, raw = pcall(readfile, SlotPath(index))
+        local data = ok and Decode(raw)
+        if not data or data.schema ~= 1 or type(data.profiles) ~= "table" then return nil end
+        local rev = data.revision
+        if type(rev) ~= "number" or rev < 1 or rev >= 2^53 or rev % 1 ~= 0 then return nil end
+        local result, count = {}, 0
+        for name, profile in pairs(data.profiles) do
+            count = count + 1
+            if count > 16 or not ProfileName(name) then return nil end
+            result[name] = ValidateProfile(profile, true)
+            if not result[name] then return nil end
+        end
+        if not ProfileName(data.active) or not result[data.active] then return nil end
+        return {revision = rev, profiles = result, active = data.active}
+    end
+
+    local function Snapshot()
+        local values = table.clone(settings)
+        for key, control in pairs(registered) do values[key] = control.Get() end
+        return {values = values}
+    end
+
+    local function Flush()
+        if not dirty then return end
+        profiles[activeProfile] = Snapshot()
+        dirty = false
+        if not filesAvailable then return end
+        local nextSlot = 3 - slot
+        local ok, encoded = pcall(HttpService.JSONEncode, HttpService, {
+            schema = 1, revision = revision + 1, active = activeProfile, profiles = profiles,
+        })
+        if ok then
+            ok = pcall(writefile, SlotPath(nextSlot), encoded)
+            if ok then
+                local readOk, roundTrip = pcall(readfile, SlotPath(nextSlot))
+                ok = readOk and roundTrip == encoded
+            end
+        end
+        if ok then
+            revision, slot = revision + 1, nextSlot
+            status = "Perfis salvos no dispositivo"
+        else
+            status = "Falha na gravação · alterações em memória"
+        end
+    end
+
+    local function Changed()
+        if loading then return end
+        dirty = true
+        if saving then return end
+        saving = true
+        task.delay(0.6, function()
+            saving = false
+            if not Library.Destroyed then
+                Flush()
+                if Library.RefreshProfileStatus then Library.RefreshProfileStatus() end
+            end
+        end)
+    end
+
+    local function Register(options, control, validate)
+        if not options.Key then return end
+        assert(not registered[options.Key], "Chave de configuração duplicada: " .. options.Key)
+        local original = options.Callback
+        options.Callback = function(value)
+            if original then original(value) end
+            Changed()
+        end
+        registered[options.Key] = {
+            Get = function() return control:Get() end,
+            Set = function(value) control:Set(value, options.PassiveRestore) end,
+            Default = control:Get(),
+            Validate = validate,
+        }
+    end
+
+    local activeTweens = {}
     local function Tween(object, properties, duration, style, direction)
+        local previous = activeTweens[object]
+        if previous then
+            for property in pairs(properties) do
+                local tween = previous[property]
+                if tween then tween:Cancel() end
+            end
+        end
+        if not settings.animations or settings.reduced or settings.lowPower then
+            for property, value in pairs(properties) do object[property] = value end
+            return
+        end
         local tween = TweenService:Create(
             object,
             TweenInfo.new(duration or 0.2, style or Enum.EasingStyle.Quart, direction or Enum.EasingDirection.Out),
             properties
         )
+        local running = activeTweens[object] or {}
+        activeTweens[object] = running
+        for property in pairs(properties) do running[property] = tween end
+        tween.Completed:Once(function()
+            for property in pairs(properties) do
+                if running[property] == tween then running[property] = nil end
+            end
+            if not next(running) and activeTweens[object] == running then activeTweens[object] = nil end
+            tween:Destroy()
+        end)
         tween:Play()
-        return tween
     end
 
     local function Create(className, properties, parent)
         local object = Instance.new(className)
         for property, value in pairs(properties or {}) do
-            object[property] = value
+            if type(value) == "string" and value:sub(1, 1) == "@" and Theme[value:sub(2)] and property:find("Color") then
+                local role = value:sub(2)
+                Bind(object, property, function() return Theme[role] end)
+            else
+                object[property] = value
+            end
         end
         object.Parent = parent
         return object
@@ -92,7 +299,7 @@ local VANTA = (function()
 
     local function Stroke(parent, color, transparency, thickness)
         return Create("UIStroke", {
-            Color = color or Theme.Border,
+            Color = color or "@Border",
             Transparency = transparency or 0,
             Thickness = thickness or 1,
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border
@@ -109,17 +316,18 @@ local VANTA = (function()
     end
 
     local function Gradient(parent, color0, color1, rotation)
-        return Create("UIGradient", {
-            Color = ColorSequence.new(color0, color1),
-            Rotation = rotation or 90
-        }, parent)
+        local gradient = Create("UIGradient", {Rotation = rotation or 90}, parent)
+        Bind(gradient, "Color", function()
+            return ColorSequence.new(Theme[color0], Theme[color1])
+        end)
+        return gradient
     end
 
     local function Text(parent, properties)
         properties.BackgroundTransparency = 1
         properties.Font = properties.Font or Enum.Font.Gotham
         properties.TextSize = properties.TextSize or 12
-        properties.TextColor3 = properties.TextColor3 or Theme.Text
+        properties.TextColor3 = properties.TextColor3 or "@Text"
         properties.TextXAlignment = properties.TextXAlignment or Enum.TextXAlignment.Left
         return Create("TextLabel", properties, parent)
     end
@@ -133,8 +341,17 @@ local VANTA = (function()
     end
 
     local function Hover(button, normal, hovered)
-        Connect(button.MouseEnter, function() Tween(button, { BackgroundColor3 = hovered }, 0.15) end)
-        Connect(button.MouseLeave, function() Tween(button, { BackgroundColor3 = normal }, 0.15) end)
+        local inside = false
+        local function Resolve() return Theme[inside and hovered or normal] end
+        Bind(button, "BackgroundColor3", Resolve)
+        Connect(button.MouseEnter, function()
+            inside = true
+            Tween(button, {BackgroundColor3 = Resolve()}, 0.15)
+        end)
+        Connect(button.MouseLeave, function()
+            inside = false
+            Tween(button, {BackgroundColor3 = Resolve()}, 0.15)
+        end)
     end
 
     local function ExecutorName()
@@ -177,7 +394,7 @@ local VANTA = (function()
     end
     Library.ScreenGui = ScreenGui
 
-    -- Root (escala adaptativa + borda animada) e Main (CanvasGroup para fade)
+    -- Janela adaptativa com contorno temático e fade
     local Root = Create("Frame", {
         Name = "Root",
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -195,16 +412,26 @@ local VANTA = (function()
         Transparency = 0.3,
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     }, Root)
-    local StrokeGradient = Create("UIGradient", {
-        Color = ColorSequence.new({
+    local StrokeGradient = Create("UIGradient", {Rotation = 35}, RootStroke)
+    Bind(StrokeGradient, "Color", function()
+        return ColorSequence.new({
             ColorSequenceKeypoint.new(0, Theme.Accent2),
-            ColorSequenceKeypoint.new(0.5, Theme.Border),
-            ColorSequenceKeypoint.new(1, Theme.Accent)
+            ColorSequenceKeypoint.new(0.4, Theme.Border),
+            ColorSequenceKeypoint.new(1, Theme.Accent),
         })
-    }, RootStroke)
+    end)
+    for index = 1, 3 do
+        local shadow = Create("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, index * 2),
+            Size = UDim2.new(1, index * 4, 1, index * 4), ZIndex = 1,
+            BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.87,
+        }, Root)
+        Corner(shadow, 12)
+    end
 
     local Main = Create("CanvasGroup", {
         Name = "Main",
+        ZIndex = 2,
         Size = UDim2.fromScale(1, 1),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
@@ -215,26 +442,37 @@ local VANTA = (function()
         Size = UDim2.fromScale(1, 1),
         BackgroundColor3 = Color3.new(1, 1, 1),
         BorderSizePixel = 0,
-        ZIndex = 0
+        ZIndex = 1
     }, Main)
-    Gradient(MainBackground, Color3.fromRGB(21, 21, 28), Color3.fromRGB(11, 11, 15), 90)
+    Gradient(MainBackground, "Surface2", "Background", 90)
     local IntroScale = Create("UIScale", { Scale = 0.94 }, Main)
     Library.Main = Main
 
     -- escala adaptativa a tela (rebind quando a camera mudar)
     local viewportConnection
+    local updateDashboardLayout
     local function UpdateScale()
         local camera = workspace.CurrentCamera
         if not camera then return end
-        local viewport = camera.ViewportSize
-        FitScale.Scale = math.clamp(math.min(viewport.X / 700, viewport.Y / 430), 0.55, 1)
+        local viewport = ScreenGui.AbsoluteSize
+        if viewport.X <= 0 or viewport.Y <= 0 then viewport = camera.ViewportSize end
+        local targetScale = settings.scale / 100
+        local width = math.clamp((viewport.X - 24) / targetScale, 290, 760)
+        local height = math.clamp((viewport.Y - 24) / targetScale, 355, 540)
+        Root.Size = UDim2.fromOffset(width, height)
+        FitScale.Scale = math.max(0.1, math.min(targetScale, (viewport.X - 12) / width, (viewport.Y - 12) / height))
+        if updateDashboardLayout then updateDashboardLayout(width < 560, height) end
     end
     local function BindCamera()
         if viewportConnection then viewportConnection:Disconnect() viewportConnection = nil end
         local camera = workspace.CurrentCamera
         if camera then
-            viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(UpdateScale)
+            viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+                Root.Position = UDim2.fromScale(0.5, 0.5)
+                UpdateScale()
+            end)
         end
+        Root.Position = UDim2.fromScale(0.5, 0.5)
         UpdateScale()
     end
     BindCamera()
@@ -248,15 +486,16 @@ local VANTA = (function()
     -- ------------------------------------------------------------------
     local Topbar = Create("Frame", {
         Name = "Topbar",
+        Active = true,
         Size = UDim2.new(1, 0, 0, 42),
-        BackgroundColor3 = Theme.Surface,
+        BackgroundColor3 = "@Surface",
         BackgroundTransparency = 0.25,
         BorderSizePixel = 0
     }, Main)
     Create("Frame", {
         Position = UDim2.new(0, 0, 1, -1),
         Size = UDim2.new(1, 0, 0, 1),
-        BackgroundColor3 = Theme.Border,
+        BackgroundColor3 = "@Border",
         BorderSizePixel = 0
     }, Topbar)
 
@@ -267,7 +506,7 @@ local VANTA = (function()
         BorderSizePixel = 0
     }, Topbar)
     Corner(Logo, 8)
-    Gradient(Logo, Theme.Accent2, Theme.AccentDark, 45)
+    Gradient(Logo, "Accent2", "AccentDark", 45)
     Text(Logo, {
         Size = UDim2.fromScale(1, 1), Text = "V", Font = Enum.Font.GothamBlack,
         TextSize = 15, TextColor3 = Color3.new(1, 1, 1), TextXAlignment = Enum.TextXAlignment.Center
@@ -275,19 +514,19 @@ local VANTA = (function()
 
     local TitleLabel = Text(Topbar, {
         Position = UDim2.fromOffset(48, 0),
-        Size = UDim2.new(1, -150, 1, 0),
+        Size = UDim2.new(1, -238, 1, 0),
         RichText = true,
         Font = Enum.Font.GothamBold,
         TextSize = 13,
         TextTruncate = Enum.TextTruncate.AtEnd,
-        Text = "VANTA  <font color='#87879a'>v4.1</font>"
+        Text = "VANTA  5.0"
     })
 
     task.spawn(function()
         local ok, info = pcall(function() return MarketplaceService:GetProductInfo(game.PlaceId) end)
         if ok and info and info.Name and TitleLabel.Parent then
             local safe = string.gsub(tostring(info.Name), "[<>&]", "")
-            TitleLabel.Text = "VANTA  <font color='#87879a'>" .. safe .. "</font>"
+            TitleLabel.Text = "VANTA 5.0  /  " .. safe
         end
     end)
 
@@ -296,45 +535,49 @@ local VANTA = (function()
             AnchorPoint = Vector2.new(1, 0.5),
             Position = UDim2.new(1, xOffset, 0.5, 0),
             Size = UDim2.fromOffset(28, 28),
-            BackgroundColor3 = Theme.Surface2,
+            BackgroundColor3 = "@Surface2",
             Text = glyph,
-            TextColor3 = Theme.Text,
+            TextColor3 = "@Text",
             TextSize = 16,
             Font = Enum.Font.GothamBold,
             AutoButtonColor = false
         }, Topbar)
         Corner(button, 8)
-        Hover(button, Theme.Surface2, Theme.Surface3)
+        Hover(button, "Surface2", "Surface3")
         AddPress(button)
         return button
     end
     local MinButton = TopButton("–", -46)
     local CloseButton = TopButton("×", -12)
-    Hover(CloseButton, Theme.Surface2, Theme.AccentDark)
+
 
     -- arrastar a janela (corrigido para UIScale)
     local dragging = false
     local dragStart, startPosition
     Connect(Topbar.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
+            if dragging then return end
+            dragging = input
             dragStart = input.Position
             startPosition = Root.Position
         end
     end)
     Connect(UserInputService.InputChanged, function(input)
         if not dragging then return end
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        if input == dragging or (dragging.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement) then
             local delta = input.Position - dragStart
             local camera = workspace.CurrentCamera
             local viewport = camera and camera.ViewportSize or Vector2.new(800, 400)
-            local x = math.clamp(startPosition.X.Offset + delta.X, -viewport.X / 2 + 60, viewport.X / 2 - 60)
-            local y = math.clamp(startPosition.Y.Offset + delta.Y, -viewport.Y / 2 + 40, viewport.Y / 2 - 40)
+            local size = Root.AbsoluteSize
+            local horizontal = math.max(0, (viewport.X - size.X) / 2)
+            local vertical = math.max(0, (viewport.Y - size.Y) / 2)
+            local x = math.clamp(startPosition.X.Offset + delta.X, -horizontal, horizontal)
+            local y = math.clamp(startPosition.Y.Offset + delta.Y, -vertical, vertical)
             Root.Position = UDim2.new(startPosition.X.Scale, x, startPosition.Y.Scale, y)
         end
     end)
     Connect(UserInputService.InputEnded, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if input == dragging then
             dragging = false
         end
     end)
@@ -346,39 +589,39 @@ local VANTA = (function()
         Name = "Sidebar",
         Position = UDim2.fromOffset(0, 42),
         Size = UDim2.new(0, 52, 1, -42),
-        BackgroundColor3 = Theme.Surface,
+        BackgroundColor3 = "@Surface",
         BackgroundTransparency = 0.35,
         BorderSizePixel = 0
     }, Main)
     Create("Frame", {
         Position = UDim2.new(1, -1, 0, 0),
         Size = UDim2.new(0, 1, 1, 0),
-        BackgroundColor3 = Theme.Border,
+        BackgroundColor3 = "@Border",
         BorderSizePixel = 0
     }, Sidebar)
 
     local Indicator = Create("Frame", {
         Position = UDim2.fromOffset(8, 10),
-        Size = UDim2.fromOffset(36, 36),
+        Size = UDim2.fromOffset(42, 42),
         BackgroundColor3 = Color3.new(1, 1, 1),
         BorderSizePixel = 0,
         Visible = false,
         ZIndex = 2
     }, Sidebar)
     Corner(Indicator, 10)
-    Gradient(Indicator, Theme.Accent, Theme.AccentDark, 45)
+    Gradient(Indicator, "Accent", "AccentDark", 45)
 
     local AvatarFrame = Create("ImageLabel", {
         AnchorPoint = Vector2.new(0, 1),
         Position = UDim2.new(0, 10, 1, -10),
         Size = UDim2.fromOffset(32, 32),
-        BackgroundColor3 = Theme.Surface3,
+        BackgroundColor3 = "@Surface3",
         BorderSizePixel = 0,
         Image = "",
         ZIndex = 3
     }, Sidebar)
     Corner(AvatarFrame, 16)
-    Stroke(AvatarFrame, Theme.Accent, 0.2, 1.5)
+    Stroke(AvatarFrame, "@Accent", 0.2, 1.5)
     LoadAvatar(AvatarFrame)
 
     -- area de conteudo
@@ -416,7 +659,23 @@ local VANTA = (function()
     function Library:Notify(options)
         if Library.Destroyed then return end
         options = options or {}
-        local duration = options.Duration or 3
+        if not settings.notifications and not options.Force then return end
+        local duration = settings.notificationSeconds > 0 and settings.notificationSeconds or options.Duration or 3
+        local category = options.Category or "info"
+        local role = category == "warning" and "@Danger" or category == "success" and "@Success" or "@Accent"
+        local prefix = category == "warning" and "!  " or category == "success" and "✓  " or "•  "
+        local function Remove(wrapper)
+            for _, child in ipairs(wrapper:GetDescendants()) do bindings[child] = nil end
+            wrapper:Destroy()
+        end
+        local cards = NotificationHolder:GetChildren()
+        if #cards >= 5 then
+            local oldest
+            for _, child in ipairs(cards) do
+                if child:IsA("Frame") and (not oldest or child.LayoutOrder < oldest.LayoutOrder) then oldest = child end
+            end
+            if oldest then Remove(oldest) end
+        end
         notificationOrder = notificationOrder + 1
 
         local Wrapper = Create("Frame", {
@@ -430,16 +689,16 @@ local VANTA = (function()
         local Card = Create("Frame", {
             Position = UDim2.fromOffset(270, 0),
             Size = UDim2.fromScale(1, 1),
-            BackgroundColor3 = Theme.Surface,
+            BackgroundColor3 = "@Surface",
             BorderSizePixel = 0,
             ZIndex = 102
         }, Wrapper)
         Corner(Card, 10)
-        Stroke(Card, Theme.Border)
+        Stroke(Card, "@Border")
 
         local Bar = Create("Frame", {
             Size = UDim2.fromOffset(3, 64),
-            BackgroundColor3 = Theme.Accent,
+            BackgroundColor3 = role,
             BorderSizePixel = 0,
             ZIndex = 103
         }, Card)
@@ -447,11 +706,11 @@ local VANTA = (function()
 
         Text(Card, {
             Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -22, 0, 18),
-            Text = options.Title or "VANTA", Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 103
+            Text = prefix .. (options.Title or "VANTA"), Font = Enum.Font.GothamBold, TextSize = 12, ZIndex = 103
         })
         Text(Card, {
             Position = UDim2.fromOffset(14, 26), Size = UDim2.new(1, -22, 0, 26),
-            Text = options.Description or "", TextSize = 10, TextColor3 = Theme.Muted,
+            Text = options.Description or "", TextSize = 10, TextColor3 = "@Muted",
             TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 103
         })
 
@@ -459,19 +718,21 @@ local VANTA = (function()
             AnchorPoint = Vector2.new(0, 1),
             Position = UDim2.new(0, 0, 1, 0),
             Size = UDim2.new(1, 0, 0, 2),
-            BackgroundColor3 = Theme.Accent,
+            BackgroundColor3 = role,
             BorderSizePixel = 0,
             ZIndex = 103
         }, Card)
 
         Tween(Card, { Position = UDim2.fromOffset(0, 0) }, 0.35, Enum.EasingStyle.Back)
-        Tween(Progress, { Size = UDim2.new(0, 0, 0, 2) }, duration, Enum.EasingStyle.Linear)
+        if settings.animations and not settings.reduced and not settings.lowPower then
+            Tween(Progress, {Size = UDim2.new(0, 0, 0, 2)}, duration, Enum.EasingStyle.Linear)
+        end
 
         task.delay(duration, function()
             if Wrapper and Wrapper.Parent then
                 Tween(Card, { Position = UDim2.fromOffset(270, 0) }, 0.25)
                 task.wait(0.28)
-                if Wrapper and Wrapper.Parent then Wrapper:Destroy() end
+                if Wrapper.Parent then Remove(Wrapper) end
             end
         end)
     end
@@ -492,12 +753,12 @@ local VANTA = (function()
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5),
         Size = UDim2.fromOffset(280, 128),
-        BackgroundColor3 = Theme.Surface,
+        BackgroundColor3 = "@Surface",
         BorderSizePixel = 0,
         ZIndex = 51
     }, Overlay)
     Corner(ConfirmCard, 12)
-    Stroke(ConfirmCard, Theme.Border)
+    Stroke(ConfirmCard, "@Border")
     local ConfirmScale = Create("UIScale", { Scale = 0.9 }, ConfirmCard)
 
     local ConfirmTitle = Text(ConfirmCard, {
@@ -507,35 +768,40 @@ local VANTA = (function()
     local ConfirmMessage = Text(ConfirmCard, {
         Position = UDim2.fromOffset(16, 36), Size = UDim2.new(1, -32, 0, 34),
         Text = "A interface e todas as funções serão encerradas.", TextSize = 11,
-        TextColor3 = Theme.Muted, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 52
+        TextColor3 = "@Muted", TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top, ZIndex = 52
     })
 
     local ConfirmYes = Create("TextButton", {
         Position = UDim2.new(0, 16, 1, -42), Size = UDim2.new(0.5, -22, 0, 30),
-        BackgroundColor3 = Theme.Accent, Text = "Descarregar", TextColor3 = Color3.new(1, 1, 1),
+        BackgroundColor3 = "@Accent", Text = "Descarregar", TextColor3 = Color3.new(1, 1, 1),
         TextSize = 12, Font = Enum.Font.GothamBold, AutoButtonColor = false, ZIndex = 52
     }, ConfirmCard)
     Corner(ConfirmYes, 8)
-    Hover(ConfirmYes, Theme.Accent, Theme.Accent2)
+    Hover(ConfirmYes, "Accent", "Accent2")
     AddPress(ConfirmYes)
 
     local ConfirmNo = Create("TextButton", {
         AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 1, -42), Size = UDim2.new(0.5, -22, 0, 30),
-        BackgroundColor3 = Theme.Surface3, Text = "Cancelar", TextColor3 = Theme.Text,
+        BackgroundColor3 = "@Surface3", Text = "Cancelar", TextColor3 = "@Text",
         TextSize = 12, Font = Enum.Font.GothamBold, AutoButtonColor = false, ZIndex = 52
     }, ConfirmCard)
     Corner(ConfirmNo, 8)
-    Hover(ConfirmNo, Theme.Surface3, Theme.Border)
+    Hover(ConfirmNo, "Surface3", "Border")
     AddPress(ConfirmNo)
 
     local confirmCallback = nil
+    local confirmToken = 0
     local function HideConfirm()
         Tween(Overlay, { BackgroundTransparency = 1 }, 0.15)
         Tween(ConfirmScale, { Scale = 0.9 }, 0.15)
-        task.delay(0.16, function() if Overlay.Parent then Overlay.Visible = false end end)
+        local token = confirmToken
+        task.delay(0.16, function()
+            if Overlay.Parent and token == confirmToken then Overlay.Visible = false end
+        end)
     end
 
     function Library:Confirm(title, message, yesText, callback)
+        confirmToken = confirmToken + 1
         ConfirmTitle.Text = title or "Confirmar"
         ConfirmMessage.Text = message or ""
         ConfirmYes.Text = yesText or "Confirmar"
@@ -545,13 +811,13 @@ local VANTA = (function()
         Tween(ConfirmScale, { Scale = 1 }, 0.25, Enum.EasingStyle.Back)
     end
 
-    Connect(ConfirmYes.MouseButton1Click, function()
+    Connect(ConfirmYes.Activated, function()
         local callback = confirmCallback
         confirmCallback = nil
         HideConfirm()
         if callback then callback() end
     end)
-    Connect(ConfirmNo.MouseButton1Click, function()
+    Connect(ConfirmNo.Activated, function()
         confirmCallback = nil
         HideConfirm()
     end)
@@ -571,12 +837,12 @@ local VANTA = (function()
         ZIndex = 200
     }, ScreenGui)
     Corner(FloatButton, 22)
-    Gradient(FloatButton, Theme.Accent2, Theme.AccentDark, 45)
+    Gradient(FloatButton, "Accent2", "AccentDark", 45)
     Text(FloatButton, {
         Size = UDim2.fromScale(1, 1), Text = "V", Font = Enum.Font.GothamBlack, TextSize = 20,
         TextColor3 = Color3.new(1, 1, 1), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 201
     })
-    Stroke(FloatButton, Theme.Border, 0.3)
+    Stroke(FloatButton, "@Border", 0.3)
 
     function Library:SetVisible(state)
         if Library.Destroyed or state == visibleState then return end
@@ -605,67 +871,98 @@ local VANTA = (function()
     local floatStart, floatStartPos
     Connect(FloatButton.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            floatDragging, floatMoved = true, 0
+            if floatDragging then return end
+            floatDragging, floatMoved = input, 0
             floatStart, floatStartPos = input.Position, FloatButton.Position
         end
     end)
     Connect(UserInputService.InputChanged, function(input)
-        if floatDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        if floatDragging and (input == floatDragging or (floatDragging.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement)) then
             local delta = input.Position - floatStart
             floatMoved = math.max(floatMoved, delta.Magnitude)
-            FloatButton.Position = UDim2.new(floatStartPos.X.Scale, floatStartPos.X.Offset + delta.X, floatStartPos.Y.Scale, floatStartPos.Y.Offset + delta.Y)
+            local size = ScreenGui.AbsoluteSize
+            local buttonSize = FloatButton.AbsoluteSize
+            local anchor = FloatButton.AnchorPoint
+            local x = math.clamp(floatStartPos.X.Scale * size.X + floatStartPos.X.Offset + delta.X,
+                anchor.X * buttonSize.X, math.max(anchor.X * buttonSize.X, size.X - (1 - anchor.X) * buttonSize.X))
+            local y = math.clamp(floatStartPos.Y.Scale * size.Y + floatStartPos.Y.Offset + delta.Y,
+                buttonSize.Y / 2, math.max(buttonSize.Y / 2, size.Y - buttonSize.Y / 2))
+            FloatButton.Position = UDim2.fromOffset(x, y)
         end
     end)
     Connect(UserInputService.InputEnded, function(input)
-        if floatDragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+        if input == floatDragging then
             floatDragging = false
             if floatMoved < 8 then Library:SetVisible(true) end
         end
     end)
 
-    Connect(MinButton.MouseButton1Click, function() Library:SetVisible(false) end)
-    Connect(CloseButton.MouseButton1Click, function()
+    Connect(MinButton.Activated, function() Library:SetVisible(false) end)
+    Connect(CloseButton.Activated, function()
         Library:Confirm("Descarregar VANTA?", "A interface e todas as funções serão encerradas.", "Descarregar", function()
             Library:Destroy()
         end)
     end)
     Connect(UserInputService.InputBegan, function(input, processed)
-        if not processed and input.KeyCode == Enum.KeyCode.RightShift then
+        if not processed and not Library.CapturingKey and not UserInputService:GetFocusedTextBox() and input.KeyCode.Name == settings.keybind then
             Library:SetVisible(not visibleState)
         end
     end)
 
-    -- borda animada
-    Connect(RunService.Heartbeat, function(dt)
-        if visibleState then
-            StrokeGradient.Rotation = (StrokeGradient.Rotation + dt * 45) % 360
+    Library.NavigationHint = Text(Topbar, {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -86, 0.5, 0),
+        Size = UDim2.fromOffset(96, 22), Text = "", TextColor3 = "@Muted",
+        TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd,
+    })
+
+    local icons = {Home = "▦", Aimbot = "◎", ["Silent Aim"] = "◈", ["Aim Kill"] = "◆", Visuals = "◇", Settings = "⚙"}
+    local navLabels = {Home = "HOME", Aimbot = "AIM", ["Silent Aim"] = "SILENT", ["Aim Kill"] = "KILL", Visuals = "VISUAL", Settings = "SETUP"}
+
+    local function IsPress(input)
+        return input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1
+    end
+
+    local sliderInput, sliderUpdate, sliderScroll
+    Connect(UserInputService.InputChanged, function(input)
+        if sliderInput and (input == sliderInput or (
+            sliderInput.UserInputType == Enum.UserInputType.MouseButton1
+            and input.UserInputType == Enum.UserInputType.MouseMovement
+        )) then sliderUpdate(input) end
+    end)
+    Connect(UserInputService.InputEnded, function(input)
+        if input == sliderInput then
+            sliderScroll.ScrollingEnabled = true
+            sliderInput, sliderUpdate, sliderScroll = nil, nil, nil
         end
     end)
 
-    -- ------------------------------------------------------------------
-    -- Abas e secoes
-    -- ------------------------------------------------------------------
-    local tabSwitchToken = 0
-
     function Library:CreateTab(name, icon)
         local index = #Library.Tabs + 1
-        local y = 10 + (index - 1) * 42
+        local y = 8 + (index - 1) * 46
 
         local NavButton = Create("TextButton", {
             Name = name,
-            Position = UDim2.fromOffset(8, y),
-            Size = UDim2.fromOffset(36, 36),
+            Position = UDim2.fromOffset(5, y),
+            Size = UDim2.fromOffset(42, 42),
             BackgroundTransparency = 1,
             Text = "",
             AutoButtonColor = false,
             ZIndex = 3
         }, Sidebar)
         AddPress(NavButton)
+        Connect(NavButton.MouseEnter, function() Library.NavigationHint.Text = name end)
+        Connect(NavButton.MouseLeave, function() Library.NavigationHint.Text = CurrentTab and CurrentTab.Name or "Dashboard" end)
 
         local IconLabel = Text(NavButton, {
-            Size = UDim2.fromScale(1, 1), Text = icon or "•", TextSize = 17,
+            Size = UDim2.new(1, 0, 0, 28), Text = icons[name] or icon or "•", TextSize = 17,
             Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Center,
             TextTransparency = 0.45, ZIndex = 4
+        })
+
+        Text(NavButton, {
+            Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, 0, 0, 12),
+            Text = navLabels[name] or name, TextSize = 8, Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = "@Text", ZIndex = 4,
         })
 
         local PageGroup = Create("CanvasGroup", {
@@ -681,7 +978,7 @@ local VANTA = (function()
             BackgroundTransparency = 1,
             BorderSizePixel = 0,
             ScrollBarThickness = 3,
-            ScrollBarImageColor3 = Theme.Accent,
+            ScrollBarImageColor3 = "@Accent",
             CanvasSize = UDim2.new(0, 0, 0, 0),
             AutomaticCanvasSize = Enum.AutomaticSize.Y,
             ScrollingDirection = Enum.ScrollingDirection.Y
@@ -689,14 +986,14 @@ local VANTA = (function()
         Padding(Scroll, 2, 8, 2, 8)
         Create("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, Scroll)
 
-        local Tab = { Group = PageGroup, Scroll = Scroll, Icon = IconLabel, Y = y }
+        local Tab = { Name = name, Group = PageGroup, Scroll = Scroll, Icon = IconLabel, Y = y, Sections = {} }
 
         local function SelectTab()
             if CurrentTab == Tab then return end
             local previous = CurrentTab
             CurrentTab = Tab
-            tabSwitchToken = tabSwitchToken + 1
-
+            Library.NavigationHint.Text = name
+    
             if previous then
                 previous.Group.Visible = false
                 previous.Group.GroupTransparency = 1
@@ -710,16 +1007,38 @@ local VANTA = (function()
             Tween(IconLabel, { TextTransparency = 0 }, 0.15)
 
             Indicator.Visible = true
-            Tween(Indicator, { Position = UDim2.fromOffset(8, y) }, 0.28, Enum.EasingStyle.Quart)
+            Tween(Indicator, { Position = UDim2.fromOffset(5, y) }, 0.28, Enum.EasingStyle.Quart)
         end
 
         Tab.Select = SelectTab
-        Connect(NavButton.MouseButton1Click, SelectTab)
+        Connect(NavButton.Activated, SelectTab)
         table.insert(Library.Tabs, Tab)
 
         if index == 1 then
-            Indicator.Position = UDim2.fromOffset(8, y)
+            Indicator.Position = UDim2.fromOffset(5, y)
             SelectTab()
+        end
+
+        if name ~= "Home" then
+            local search = Create("TextBox", {
+                Size = UDim2.new(1, 0, 0, 43), LayoutOrder = -1, BackgroundColor3 = "@Surface",
+                TextColor3 = "@Text", PlaceholderColor3 = "@Muted", PlaceholderText = "Buscar nesta aba",
+                Text = "", ClearTextOnFocus = false, TextSize = 13, Font = Enum.Font.Gotham,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }, Scroll)
+            Corner(search, 8)
+            Stroke(search)
+            Padding(search, 12, 12)
+            Connect(search:GetPropertyChangedSignal("Text"), function()
+                local query = string.lower(search.Text)
+                for card, title in pairs(Tab.Sections) do
+                    local searchable = title
+                    for _, child in ipairs(card:GetDescendants()) do
+                        if child:IsA("TextLabel") or child:IsA("TextButton") then searchable = searchable .. " " .. child.Text end
+                    end
+                    card.Visible = string.find(string.lower(searchable), query, 1, true) ~= nil
+                end
+            end)
         end
 
         local sectionOrder = 0
@@ -733,11 +1052,13 @@ local VANTA = (function()
                 BorderSizePixel = 0,
                 LayoutOrder = sectionOrder
             }, Scroll)
+            Tab.Sections[Card] = title or ""
             Corner(Card, 10)
-            Stroke(Card, Theme.Border)
-            Gradient(Card, Color3.fromRGB(27, 27, 35), Color3.fromRGB(19, 19, 25), 90)
+            Stroke(Card, "@Border")
+            Gradient(Card, "Surface2", "Background", 90)
             Padding(Card, 12, 12, 10, 12)
-            Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, Card)
+            local layout = Create("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, Card)
+            Bind(layout, "Padding", function() return UDim.new(0, settings.density == "Compacta" and 4 or 8) end)
 
             local order = 0
             local function NextOrder()
@@ -754,11 +1075,122 @@ local VANTA = (function()
             if description then
                 Text(Header, {
                     Position = UDim2.fromOffset(0, 17), Size = UDim2.new(1, 0, 0, 14),
-                    Text = description, TextSize = 10, TextColor3 = Theme.Muted
+                    Text = description, TextSize = 10, TextColor3 = "@Muted", TextTruncate = Enum.TextTruncate.AtEnd
                 })
             end
 
             local Section = {}
+
+            function Section:CreateInput(options)
+                local height = options.Multiline and 105 or 50
+                local Box = Create("TextBox", {
+                    Size = UDim2.new(1, 0, 0, height), LayoutOrder = NextOrder(),
+                    BackgroundColor3 = "@Surface2", TextColor3 = "@Text",
+                    PlaceholderColor3 = "@Muted", PlaceholderText = options.Name,
+                    Text = options.Default or "", ClearTextOnFocus = false,
+                    MultiLine = options.Multiline == true, TextWrapped = true,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    TextYAlignment = options.Multiline and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center,
+                    Font = Enum.Font.Gotham, TextSize = 12,
+                }, Card)
+                Corner(Box, 8)
+                Stroke(Box)
+                Padding(Box, 10, 10, options.Multiline and 8 or 0, 0)
+                Connect(Box.FocusLost, function()
+                    local limit = options.Multiline and 65536 or 128
+                    if #Box.Text > limit then Box.Text = options.Default or "" end
+                    if options.Callback then options.Callback(Box.Text) end
+                end)
+                return {
+                    Get = function() return Box.Text end,
+                    Set = function(_, value) Box.Text = value end,
+                }
+            end
+
+            function Section:CreateSwatches()
+                local row = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, LayoutOrder = NextOrder(),
+                }, Card)
+                local swatches = {}
+                for index = 1, 3 do
+                    swatches[index] = Create("Frame", {
+                        Size = UDim2.new(1/3, -4, 1, 0), Position = UDim2.fromScale((index - 1)/3, 0),
+                    }, row)
+                    Corner(swatches[index], 5)
+                end
+                return function(colors)
+                    for index, swatch in ipairs(swatches) do swatch.BackgroundColor3 = colors[index] end
+                end
+            end
+
+            function Section:CreateColorPicker(options)
+                local draft = options.Default
+                local swatch = self:CreateSwatches()
+                local input = self:CreateInput({Name = options.Name .. " · #RRGGBB (vazio = tema)", Default = draft})
+                local hue = self:CreateSlider({Name = options.Name .. " · matiz", Max = 359, Callback = function(value)
+                    local color = Color3.fromHSV(value / 360, 0.68, 0.88)
+                    input:Set(color:ToHex())
+                    swatch({color, color:Lerp(Color3.new(1, 1, 1), 0.25), color:Lerp(Color3.new(0, 0, 0), 0.25)})
+                end})
+                local control = {Get = function() return draft end}
+                local function Validate(value) return value == "" and "" or Hex(value) end
+                local role = ({primary = "Accent", secondary = "AccentDark", highlight = "Accent2"})[options.Key]
+                local function Preview()
+                    local color = (draft ~= "" and Color(tonumber(draft, 16))) or Theme[role]
+                    swatch({color, color:Lerp(Color3.new(1, 1, 1), 0.25), color:Lerp(Color3.new(0, 0, 0), 0.25)})
+                end
+                table.insert(Library.ThemeObservers, Preview)
+                function control:Set(value)
+                    local clean = Validate(value)
+                    if clean == nil then
+                        Library:Notify({Title = options.Name, Description = "Use seis dígitos hexadecimais ou deixe vazio.", Category = "warning", Force = true})
+                        return
+                    end
+                    draft = clean
+                    input:Set(clean)
+                    if options.Callback then options.Callback(clean) end
+                    Preview()
+                end
+                Register(options, control, Validate)
+                Preview()
+                self:CreateButton({Name = "Aplicar cor · " .. options.Name, Icon = "✓", Callback = function() control:Set(input:Get()) end})
+                return control
+            end
+
+            function Section:CreateKeybind(options)
+                local value = options.Default
+                local awaiting = false
+                local button
+                button = self:CreateButton({Name = options.Name, Icon = "⌘", Callback = function()
+                    awaiting = true
+                    Library.CapturingKey = true
+                    button.Text = "Pressione uma tecla · Esc cancela"
+                end})
+                local control = {Get = function() return value end}
+                local function Validate(candidate)
+                    if type(candidate) ~= "string" then return nil end
+                    local ok, item = pcall(function() return Enum.KeyCode[candidate] end)
+                    return ok and item and item ~= Enum.KeyCode.Unknown and candidate or nil
+                end
+                function control:Set(candidate)
+                    value = candidate
+                    button.Text = "⌘  " .. options.Name .. " · " .. value
+                    if options.Callback then options.Callback(value) end
+                end
+                button.Text = "⌘  " .. options.Name .. " · " .. value
+                Connect(UserInputService.InputBegan, function(input, processed)
+                    if not awaiting or processed or input.KeyCode == Enum.KeyCode.Unknown then return end
+                    awaiting = false
+                    task.defer(function() Library.CapturingKey = false end)
+                    if input.KeyCode == Enum.KeyCode.Escape then
+                        button.Text = "⌘  " .. options.Name .. " · " .. value
+                    else
+                        control:Set(input.KeyCode.Name)
+                    end
+                end)
+                Register(options, control, Validate)
+                return control
+            end
 
             -- Toggle ---------------------------------------------------
             function Section:CreateToggle(options)
@@ -766,7 +1198,7 @@ local VANTA = (function()
                 local value = options.Default == true
 
                 local Row = Create("Frame", {
-                    Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Surface2,
+                    Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = "@Surface2",
                     BorderSizePixel = 0, LayoutOrder = NextOrder()
                 }, Card)
                 Corner(Row, 8)
@@ -797,6 +1229,8 @@ local VANTA = (function()
                 }, Row)
 
                 local Control = {}
+                local function TrackColor() return value and Theme.Accent or Theme.Surface3 end
+                Bind(Track, "BackgroundColor3", TrackColor)
                 function Control:Set(newValue)
                     value = newValue == true
                     Tween(Track, { BackgroundColor3 = value and Theme.Accent or Theme.Surface3 }, 0.18)
@@ -805,7 +1239,11 @@ local VANTA = (function()
                 end
                 function Control:Get() return value end
 
-                Connect(Hit.MouseButton1Click, function() Control:Set(not value) end)
+                Register(options, Control, function(candidate)
+                    if type(candidate) == "boolean" then return candidate end
+                    return nil
+                end)
+                Connect(Hit.Activated, function() Control:Set(not value) end)
                 return Control
             end
 
@@ -818,7 +1256,7 @@ local VANTA = (function()
                 local value = math.clamp(options.Default or minimum, minimum, maximum)
 
                 local Row = Create("Frame", {
-                    Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = Theme.Surface2,
+                    Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = "@Surface2",
                     BorderSizePixel = 0, LayoutOrder = NextOrder()
                 }, Card)
                 Corner(Row, 8)
@@ -830,13 +1268,13 @@ local VANTA = (function()
                 })
                 local ValueLabel = Text(Row, {
                     AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 6), Size = UDim2.fromOffset(70, 18),
-                    Text = tostring(value), TextColor3 = Theme.Accent2, Font = Enum.Font.GothamBold,
+                    Text = tostring(value), TextColor3 = "@Accent2", Font = Enum.Font.GothamBold,
                     TextSize = 11, TextXAlignment = Enum.TextXAlignment.Right
                 })
 
                 local Bar = Create("Frame", {
                     Position = UDim2.fromOffset(12, 36), Size = UDim2.new(1, -24, 0, 6),
-                    BackgroundColor3 = Theme.Surface3, BorderSizePixel = 0
+                    BackgroundColor3 = "@Surface3", BorderSizePixel = 0
                 }, Row)
                 Corner(Bar, 3)
 
@@ -845,7 +1283,7 @@ local VANTA = (function()
                     Size = UDim2.new(normalized0, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0
                 }, Bar)
                 Corner(Fill, 3)
-                Gradient(Fill, Theme.AccentDark, Theme.Accent2, 0)
+                Gradient(Fill, "AccentDark", "Accent2", 0)
 
                 local Knob = Create("Frame", {
                     AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(normalized0, 0, 0.5, 0),
@@ -858,15 +1296,14 @@ local VANTA = (function()
                     BackgroundTransparency = 1, Text = "", AutoButtonColor = false, ZIndex = 5
                 }, Row)
 
-                local draggingSlider = false
                 local Control = {}
 
                 local function Apply(newValue, silent)
                     value = math.clamp(math.floor((newValue - minimum) / step + 0.5) * step + minimum, minimum, maximum)
                     value = tonumber(string.format("%.3f", value))
                     local normalized = (value - minimum) / math.max(maximum - minimum, 1e-6)
-                    Tween(Fill, { Size = UDim2.new(normalized, 0, 1, 0) }, 0.06, Enum.EasingStyle.Linear)
-                    Tween(Knob, { Position = UDim2.new(normalized, 0, 0.5, 0) }, 0.06, Enum.EasingStyle.Linear)
+                    Fill.Size = UDim2.new(normalized, 0, 1, 0)
+                    Knob.Position = UDim2.new(normalized, 0, 0.5, 0)
                     ValueLabel.Text = tostring(value)
                     if not silent and options.Callback then options.Callback(value) end
                 end
@@ -880,25 +1317,15 @@ local VANTA = (function()
                 function Control:Set(newValue) Apply(newValue) end
                 function Control:Get() return value end
 
+                Register(options, Control, function(candidate)
+                    if type(candidate) ~= "number" or candidate ~= candidate or candidate < minimum or candidate > maximum then return nil end
+                    return candidate
+                end)
                 Connect(Hit.InputBegan, function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                        draggingSlider = true
-                        Scroll.ScrollingEnabled = false
-                        Tween(Knob, { Size = UDim2.fromOffset(18, 18) }, 0.12, Enum.EasingStyle.Back)
-                        FromInput(input)
-                    end
-                end)
-                Connect(UserInputService.InputChanged, function(input)
-                    if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-                        FromInput(input)
-                    end
-                end)
-                Connect(UserInputService.InputEnded, function(input)
-                    if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
-                        draggingSlider = false
-                        Scroll.ScrollingEnabled = true
-                        Tween(Knob, { Size = UDim2.fromOffset(14, 14) }, 0.12)
-                    end
+                    if sliderInput or not IsPress(input) then return end
+                    sliderInput, sliderUpdate, sliderScroll = input, FromInput, Scroll
+                    Scroll.ScrollingEnabled = false
+                    FromInput(input)
                 end)
 
                 return Control
@@ -910,39 +1337,39 @@ local VANTA = (function()
                 local items = options.Options or {}
                 local selected = options.Default or items[1] or "None"
                 local expanded = false
-                local listHeight = math.min(#items * 29 + 2, 150)
+                local listHeight = math.min(#items * 39 + 2, 150)
 
                 local Holder = Create("Frame", {
-                    Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Surface2,
+                    Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = "@Surface2",
                     BorderSizePixel = 0, ClipsDescendants = true, LayoutOrder = NextOrder()
                 }, Card)
                 Corner(Holder, 8)
 
                 local Header = Create("TextButton", {
-                    Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, Text = "",
+                    Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, Text = "",
                     AutoButtonColor = false, ZIndex = 5
                 }, Holder)
 
                 Text(Holder, {
-                    Position = UDim2.fromOffset(12, 0), Size = UDim2.new(0.5, -12, 0, 36),
+                    Position = UDim2.fromOffset(12, 0), Size = UDim2.new(0.5, -12, 0, 44),
                     Text = options.Name or "Dropdown", Font = Enum.Font.GothamMedium,
                     TextTruncate = Enum.TextTruncate.AtEnd
                 })
                 local SelectedLabel = Text(Holder, {
-                    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -30, 0, 0), Size = UDim2.new(0.4, 0, 0, 36),
-                    Text = tostring(selected), TextColor3 = Theme.Accent2, Font = Enum.Font.GothamBold,
+                    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -30, 0, 0), Size = UDim2.new(0.4, 0, 0, 44),
+                    Text = tostring(selected), TextColor3 = "@Accent2", Font = Enum.Font.GothamBold,
                     TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd
                 })
                 local Arrow = Text(Holder, {
-                    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 0), Size = UDim2.fromOffset(16, 36),
-                    Text = "v", TextColor3 = Theme.Muted, Font = Enum.Font.GothamBold,
+                    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -10, 0, 0), Size = UDim2.fromOffset(16, 44),
+                    Text = "v", TextColor3 = "@Muted", Font = Enum.Font.GothamBold,
                     TextXAlignment = Enum.TextXAlignment.Center
                 })
 
                 local List = Create("ScrollingFrame", {
-                    Position = UDim2.fromOffset(6, 40), Size = UDim2.new(1, -12, 0, 0),
+                    Position = UDim2.fromOffset(6, 48), Size = UDim2.new(1, -12, 0, 0),
                     BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2,
-                    ScrollBarImageColor3 = Theme.Accent, CanvasSize = UDim2.new(0, 0, 0, 0),
+                    ScrollBarImageColor3 = "@Accent", CanvasSize = UDim2.new(0, 0, 0, 0),
                     AutomaticCanvasSize = Enum.AutomaticSize.Y
                 }, Holder)
                 Create("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, List)
@@ -958,20 +1385,22 @@ local VANTA = (function()
 
                 local function Collapse()
                     expanded = false
-                    Tween(Holder, { Size = UDim2.new(1, 0, 0, 36) }, 0.2)
+                    Tween(Holder, { Size = UDim2.new(1, 0, 0, 44) }, 0.2)
                     Tween(List, { Size = UDim2.new(1, -12, 0, 0) }, 0.2)
                     Tween(Arrow, { Rotation = 0 }, 0.2)
                 end
 
                 for position, item in ipairs(items) do
                     local OptionButton = Create("TextButton", {
-                        Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = Theme.Surface3,
-                        Text = tostring(item), TextColor3 = Theme.Text, TextSize = 11,
+                        Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = "@Surface3",
+                        Text = tostring(item), TextColor3 = "@Text", TextSize = 11,
                         Font = Enum.Font.GothamMedium, AutoButtonColor = false, LayoutOrder = position
                     }, List)
                     Corner(OptionButton, 6)
                     optionButtons[item] = OptionButton
-                    Connect(OptionButton.MouseButton1Click, function()
+                    Bind(OptionButton, "BackgroundColor3", function() return item == selected and Theme.AccentDark or Theme.Surface3 end)
+                    Bind(OptionButton, "TextColor3", function() return item == selected and Color3.new(1, 1, 1) or Theme.Text end)
+                    Connect(OptionButton.Activated, function()
                         selected = item
                         SelectedLabel.Text = tostring(item)
                         Refresh()
@@ -981,10 +1410,10 @@ local VANTA = (function()
                 end
                 Refresh()
 
-                Connect(Header.MouseButton1Click, function()
+                Connect(Header.Activated, function()
                     expanded = not expanded
                     if expanded then
-                        Tween(Holder, { Size = UDim2.new(1, 0, 0, 36 + listHeight + 10) }, 0.22)
+                        Tween(Holder, { Size = UDim2.new(1, 0, 0, 44 + listHeight + 10) }, 0.22)
                         Tween(List, { Size = UDim2.new(1, -12, 0, listHeight) }, 0.22)
                         Tween(Arrow, { Rotation = 180 }, 0.2)
                     else
@@ -994,17 +1423,22 @@ local VANTA = (function()
 
                 local Control = {}
                 function Control:Get() return selected end
-                function Control:Set(newValue)
+                function Control:OnChange(callback) options.Callback = callback end
+                function Control:Set(newValue, silent)
                     for _, item in ipairs(items) do
                         if item == newValue then
                             selected = newValue
                             SelectedLabel.Text = tostring(newValue)
                             Refresh()
-                            if options.Callback then options.Callback(selected) end
+                            if not silent and options.Callback then options.Callback(selected) end
                             return
                         end
                     end
                 end
+                Register(options, Control, function(candidate)
+                    if table.find(items, candidate) then return candidate end
+                    return nil
+                end)
                 return Control
             end
 
@@ -1012,15 +1446,15 @@ local VANTA = (function()
             function Section:CreateButton(options)
                 options = options or {}
                 local Action = Create("TextButton", {
-                    Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = Theme.Surface3,
-                    Text = options.Name or "Button", TextColor3 = Theme.Text, TextSize = 12,
+                    Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = "@Surface3",
+                    Text = (options.Icon and options.Icon .. "  " or "") .. (options.Name or "Button"), TextColor3 = "@Text", TextSize = 12,
                     Font = Enum.Font.GothamBold, AutoButtonColor = false, LayoutOrder = NextOrder()
                 }, Card)
                 Corner(Action, 8)
-                Stroke(Action, Theme.Border)
-                Hover(Action, Theme.Surface3, Theme.AccentDark)
+                Stroke(Action, "@Border")
+                Hover(Action, "Surface3", "AccentDark")
                 AddPress(Action)
-                Connect(Action.MouseButton1Click, function()
+                Connect(Action.Activated, function()
                     if options.Callback then options.Callback() end
                 end)
                 return Action
@@ -1029,8 +1463,8 @@ local VANTA = (function()
             -- Label ----------------------------------------------------
             function Section:CreateLabel(text)
                 local LabelObject = Text(Card, {
-                    Size = UDim2.new(1, 0, 0, 20), Text = text or "", TextSize = 11,
-                    TextColor3 = Theme.Muted, TextWrapped = true, RichText = true, LayoutOrder = NextOrder()
+                    Size = UDim2.new(1, 0, 0, 20), AutomaticSize = Enum.AutomaticSize.Y, Text = text or "", TextSize = 12,
+                    TextColor3 = "@Muted", TextWrapped = true, RichText = false, LayoutOrder = NextOrder()
                 })
                 local Control = {}
                 function Control:Set(newText) LabelObject.Text = newText end
@@ -1060,25 +1494,25 @@ local VANTA = (function()
         BorderSizePixel = 0, LayoutOrder = HomeNext()
     }, HomeScroll)
     Corner(Greeting, 10)
-    Stroke(Greeting, Theme.Border)
-    Gradient(Greeting, Color3.fromRGB(38, 24, 30), Color3.fromRGB(20, 20, 26), 0)
+    Stroke(Greeting, "@Border")
+    Gradient(Greeting, "Surface2", "Background", 0)
 
     local GreetingAvatar = Create("ImageLabel", {
         Position = UDim2.fromOffset(12, 12), Size = UDim2.fromOffset(48, 48),
-        BackgroundColor3 = Theme.Surface3, BorderSizePixel = 0, Image = ""
+        BackgroundColor3 = "@Surface3", BorderSizePixel = 0, Image = ""
     }, Greeting)
     Corner(GreetingAvatar, 24)
     LoadAvatar(GreetingAvatar)
 
     Text(Greeting, {
         Position = UDim2.fromOffset(72, 14), Size = UDim2.new(1, -84, 0, 22),
-        Text = "Olá, " .. LocalPlayer.DisplayName, Font = Enum.Font.GothamBold, TextSize = 16,
+        Text = "VANTA 5.0  /  " .. LocalPlayer.DisplayName, Font = Enum.Font.GothamBold, TextSize = 16,
         TextTruncate = Enum.TextTruncate.AtEnd
     })
     Text(Greeting, {
         Position = UDim2.fromOffset(72, 38), Size = UDim2.new(1, -84, 0, 18),
-        Text = "@" .. LocalPlayer.Name .. "  •  " .. ExecutorName() .. "  •  RightShift mostra/oculta",
-        TextSize = 10, TextColor3 = Theme.Muted, TextTruncate = Enum.TextTruncate.AtEnd
+        Text = "@" .. LocalPlayer.Name .. "  •  " .. ExecutorName() .. "  •  Sessão ativa",
+        TextSize = 10, TextColor3 = "@Muted", TextTruncate = Enum.TextTruncate.AtEnd
     })
 
     -- linha com duas colunas
@@ -1086,13 +1520,13 @@ local VANTA = (function()
         Size = UDim2.new(1, 0, 0, 214), BackgroundTransparency = 1, LayoutOrder = HomeNext()
     }, HomeScroll)
 
-    local function InfoCard(parent, position, size, color0, color1, title, description)
+    local function InfoCard(parent, position, size, title, description)
         local Card = Create("Frame", {
             Position = position, Size = size, BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0
         }, parent)
         Corner(Card, 10)
-        Stroke(Card, Theme.Border)
-        Gradient(Card, color0, color1, 45)
+        Stroke(Card, "@Border")
+        Gradient(Card, "Surface2", "Background", 45)
         Text(Card, {
             Position = UDim2.fromOffset(12, 8), Size = UDim2.new(1, -24, 0, 16),
             Text = title, Font = Enum.Font.GothamBold, TextSize = 13
@@ -1100,7 +1534,7 @@ local VANTA = (function()
         if description then
             Text(Card, {
                 Position = UDim2.fromOffset(12, 24), Size = UDim2.new(1, -24, 0, 12),
-                Text = description, TextSize = 9, TextColor3 = Theme.Muted
+                Text = description, TextSize = 10, TextColor3 = "@Muted", TextTruncate = Enum.TextTruncate.AtEnd
             })
         end
         return Card
@@ -1108,13 +1542,13 @@ local VANTA = (function()
 
     local function Tile(parent, title, value, order, height)
         local Box = Create("Frame", {
-            BackgroundColor3 = Theme.Surface2, BackgroundTransparency = 0.15,
+            BackgroundColor3 = "@Surface2", BackgroundTransparency = 0.15,
             BorderSizePixel = 0, LayoutOrder = order
         }, parent)
         Corner(Box, 8)
         Text(Box, {
             Position = UDim2.fromOffset(8, 3), Size = UDim2.new(1, -16, 0, 12),
-            Text = title, TextSize = 9, TextColor3 = Theme.Muted, Font = Enum.Font.GothamMedium
+            Text = title, TextSize = 9, TextColor3 = "@Muted", Font = Enum.Font.GothamMedium
         })
         local ValueLabel = Text(Box, {
             Position = UDim2.fromOffset(8, height - 22), Size = UDim2.new(1, -16, 0, 18),
@@ -1124,10 +1558,11 @@ local VANTA = (function()
     end
 
     -- Servidor
+    local sessionStart = os.time()
     local ServerCard = InfoCard(Row, UDim2.fromOffset(0, 0), UDim2.new(0.5, -5, 1, 0),
-        Color3.fromRGB(36, 24, 30), Color3.fromRGB(19, 19, 25), "Servidor", "Informações da sessão atual")
+        "Servidor", "Sessão iniciada às " .. os.date("%H:%M", sessionStart))
     local ServerGrid = Create("Frame", {
-        Position = UDim2.fromOffset(12, 44), Size = UDim2.new(1, -24, 0, 138), BackgroundTransparency = 1
+        Position = UDim2.fromOffset(12, 44), Size = UDim2.new(1, -24, 0, 190), BackgroundTransparency = 1
     }, ServerCard)
     Create("UIGridLayout", {
         CellSize = UDim2.new(0.5, -3, 0, 42), CellPadding = UDim2.fromOffset(6, 6),
@@ -1139,30 +1574,32 @@ local VANTA = (function()
     local LatencyValue = Tile(ServerGrid, "Latência", "-", 3, 42)
     local CountryValue = Tile(ServerGrid, "Seu país", "-", 4, 42)
     local SessionValue = Tile(ServerGrid, "Tempo de sessão", "00:00:00", 5, 42)
+    local FPSValue = Tile(ServerGrid, "FPS", "Medindo…", 6, 42)
+    local DeviceValue = Tile(ServerGrid, "Entrada", UserInputService.TouchEnabled and "Toque" or (UserInputService.KeyboardEnabled and "Teclado" or "—"), 7, 42)
 
     local JoinButton = Create("TextButton", {
-        BackgroundColor3 = Theme.AccentDark, Text = "Copiar Join Script", TextColor3 = Color3.new(1, 1, 1),
-        TextSize = 11, Font = Enum.Font.GothamBold, AutoButtonColor = false, LayoutOrder = 6
+        BackgroundColor3 = "@AccentDark", Text = "Copiar Join Script", TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 11, Font = Enum.Font.GothamBold, AutoButtonColor = false, LayoutOrder = 8
     }, ServerGrid)
     Corner(JoinButton, 8)
-    Hover(JoinButton, Theme.AccentDark, Theme.Accent)
+    Hover(JoinButton, "AccentDark", "Accent")
     AddPress(JoinButton)
-    Connect(JoinButton.MouseButton1Click, function()
+    Connect(JoinButton.Activated, function()
         local joinScript = string.format(
             'game:GetService("TeleportService"):TeleportToPlaceInstance(%d, "%s", game.Players.LocalPlayer)',
             game.PlaceId, game.JobId)
         local copy = setclipboard or toclipboard
-        if copy then
-            pcall(copy, joinScript)
-            Library:Notify({ Title = "Join Script", Description = "Copiado para a área de transferência.", Duration = 2 })
-        else
-            Library:Notify({ Title = "Join Script", Description = "Seu executor não suporta copiar.", Duration = 3 })
-        end
+        local copied = type(copy) == "function" and pcall(copy, joinScript)
+        Library:Notify({
+            Title = "Join Script",
+            Description = copied and "Copiado para a área de transferência." or "A área de transferência está indisponível.",
+            Category = copied and "success" or "warning",
+        })
     end)
 
     -- Compatibilidade
     local CompatCard = InfoCard(Row, UDim2.new(0.5, 5, 0, 0), UDim2.new(0.5, -5, 0, 96),
-        Color3.fromRGB(120, 24, 40), Color3.fromRGB(34, 16, 24), "Compatibilidade", "Recursos disponíveis no seu executor")
+        "Compatibilidade", "Recursos disponíveis no seu executor")
     local function Status(label, ok)
         return string.format("<font color='%s'>%s %s</font>", ok and "#46be78" or "#eb505a", label, ok and "OK" or "X")
     end
@@ -1183,7 +1620,7 @@ local VANTA = (function()
 
     -- Amigos
     local FriendsCard = InfoCard(Row, UDim2.new(0.5, 5, 0, 106), UDim2.new(0.5, -5, 1, -106),
-        Color3.fromRGB(30, 26, 34), Color3.fromRGB(19, 19, 25), "Amigos", nil)
+        "Amigos", nil)
     local FriendsGrid = Create("Frame", {
         Position = UDim2.fromOffset(12, 30), Size = UDim2.new(1, -24, 0, 70), BackgroundTransparency = 1
     }, FriendsCard)
@@ -1195,6 +1632,21 @@ local VANTA = (function()
     local FriendsOnlineValue = Tile(FriendsGrid, "Online", "-", 2, 32)
     local FriendsOfflineValue = Tile(FriendsGrid, "Offline", "-", 3, 32)
     local FriendsAllValue = Tile(FriendsGrid, "Todos", "-", 4, 32)
+
+    updateDashboardLayout = function(narrow, height)
+        Row.Size = UDim2.new(1, 0, 0, narrow and 454 or 236)
+        local column = narrow and 1 or 0.5
+        local inset = narrow and 0 or -5
+        ServerCard.Size = UDim2.new(column, inset, 0, 236)
+        CompatCard.Position = narrow and UDim2.fromOffset(0, 246) or UDim2.new(0.5, 5, 0, 0)
+        CompatCard.Size = UDim2.new(column, inset, 0, 96)
+        FriendsCard.Position = narrow and UDim2.fromOffset(0, 352) or UDim2.new(0.5, 5, 0, 106)
+        FriendsCard.Size = UDim2.new(column, inset, 0, 102)
+        AvatarFrame.Visible = settings.avatar and height >= 378
+        Library.NavigationHint.Visible = not narrow
+        TitleLabel.Size = UDim2.new(1, narrow and -134 or -238, 1, 0)
+    end
+    UpdateScale()
 
     -- dados assincronos (nunca travam o carregamento)
     local FriendIds = {}
@@ -1210,7 +1662,7 @@ local VANTA = (function()
         pcall(function()
             local pages = Players:GetFriendsAsync(LocalPlayer.UserId)
             local total = 0
-            while true do
+            while not Library.Destroyed do
                 for _, item in ipairs(pages:GetCurrentPage()) do
                     total = total + 1
                     FriendIds[item.Id] = true
@@ -1223,28 +1675,28 @@ local VANTA = (function()
         pcall(function() friendOnline = #LocalPlayer:GetFriendsOnline(200) end)
     end)
 
-    local sessionStart = os.time()
     local function FormatTime(seconds)
         return string.format("%02d:%02d:%02d", math.floor(seconds / 3600), math.floor(seconds % 3600 / 60), math.floor(seconds % 60))
     end
     local function Latency()
         local ok, value = pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
-        if ok and value then return string.format("%d ms", math.floor(value)) end
+        if ok and type(value) == "number" and value == value and value >= 0 and value < math.huge then return string.format("%d ms", math.floor(value)) end
         return "-"
     end
 
-    local accumulator = 1
-    Connect(RunService.Heartbeat, function(dt)
-        accumulator = accumulator + dt
-        if accumulator < 1 then return end
-        accumulator = 0
-        if not (visibleState and CurrentTab == Home) then return end
+    local accumulator, frames = 0, 0
+    Connect(RunService.PreRender, function(dt)
+        if not (visibleState and CurrentTab == Home) then accumulator, frames = 0, 0 return end
+        accumulator, frames = accumulator + dt, frames + 1
+        if accumulator < math.max(settings.refreshSeconds, settings.lowPower and 3 or 1) then return end
+        FPSValue.Text = settings.diagnostics and string.format("%d", math.floor(frames / accumulator + 0.5)) or "—"
+        accumulator, frames = 0, 0
 
         local list = Players:GetPlayers()
         PlayersValue.Text = tostring(#list)
         MaxValue.Text = tostring(Players.MaxPlayers)
-        LatencyValue.Text = Latency()
-        CountryValue.Text = countryCode or "-"
+        LatencyValue.Text = settings.diagnostics and Latency() or "—"
+        CountryValue.Text = countryCode or "—"
         SessionValue.Text = FormatTime(os.time() - sessionStart)
 
         local inServer = 0
@@ -1260,9 +1712,259 @@ local VANTA = (function()
     -- ------------------------------------------------------------------
     -- Encerrar
     -- ------------------------------------------------------------------
+    local function ApplyAppearance()
+        ResolvePalette()
+        for object, properties in pairs(bindings) do
+            if object.Parent then
+                local colors = {}
+                for property, resolve in pairs(properties) do
+                    local value = resolve()
+                    if typeof(value) == "Color3" then
+                        if object[property] ~= value then colors[property] = value end
+                    else
+                        object[property] = value
+                    end
+                end
+                if next(colors) then Tween(object, colors, 0.17) end
+            end
+        end
+        for _, observer in ipairs(Library.ThemeObservers) do observer() end
+        AvatarFrame.Visible = settings.avatar
+        GreetingAvatar.Visible = settings.avatar
+        MainBackground.BackgroundTransparency = settings.transparency / 100
+        FloatButton.Size = UDim2.fromOffset(settings.floatSize, settings.floatSize)
+        FloatButton.AnchorPoint = Vector2.new(settings.floatSide == "Direita" and 1 or 0, 0.5)
+        FloatButton.Position = UDim2.new(FloatButton.AnchorPoint.X, settings.floatSide == "Direita" and -14 or 14, 0.5, 0)
+        UpdateScale()
+    end
+
+    local function ApplyProfile(profile)
+        loading = true
+        for key, control in pairs(registered) do
+            local value = profile.values[key]
+            if value == nil then value = control.Default end
+            control.Set(value)
+        end
+        loading = false
+        ApplyAppearance()
+    end
+
+    function Library:BuildSettings(tab)
+        local appearance = tab:CreateSection("Appearance", "Paleta, contraste e dimensões")
+        local interface = tab:CreateSection("Interface", "Navegação e feedback")
+        local performance = tab:CreateSection("Performance", "Atualizações do painel")
+        local configuration = tab:CreateSection("Configuration", "Até 16 perfis · salvamento automático")
+        local themeChoice = appearance:CreateDropdown({Name = "Paleta para prévia", Options = themeNames})
+        local swatches = appearance:CreateSwatches()
+        local function ShowSwatches()
+            local colors = palette[themeChoice:Get()]
+            swatches({Color(colors[2]), Color(colors[3]), Color(colors[4])})
+        end
+        themeChoice:OnChange(ShowSwatches)
+        ShowSwatches()
+        local function Message(message, category)
+            self:Notify({Title = "VANTA · Configuração", Description = message, Category = category, Force = true})
+        end
+        local function AppearanceChanged()
+            if not loading then ApplyAppearance() end
+        end
+        local function Option(section, method, key, options)
+            options.Key, options.Default = key, defaults[key]
+            options.Callback = function(value)
+                settings[key] = value
+                if key ~= "floatSize" and key ~= "floatSide" and key ~= "scale" and key ~= "transparency" and key ~= "avatar" and key ~= "density" then return end
+                if not loading then
+                    AvatarFrame.Visible = settings.avatar
+                    GreetingAvatar.Visible = settings.avatar
+                    MainBackground.BackgroundTransparency = settings.transparency / 100
+                    FloatButton.Size = UDim2.fromOffset(settings.floatSize, settings.floatSize)
+                    if key == "floatSide" then
+                        FloatButton.AnchorPoint = Vector2.new(value == "Direita" and 1 or 0, 0.5)
+                        FloatButton.Position = UDim2.new(FloatButton.AnchorPoint.X, value == "Direita" and -14 or 14, 0.5, 0)
+                    end
+                    if key == "density" then ApplyAppearance() else UpdateScale() end
+                end
+            end
+            return section[method](section, options)
+        end
+
+        local themeControl = {Get = function() return settings.theme end}
+        function themeControl:Set(value)
+            settings.theme = value
+            themeChoice:Set(value)
+            AppearanceChanged()
+        end
+        Register({Key = "theme"}, themeControl, function(value) return palette[value] and value end)
+        local colorControls = {}
+        for index, spec in ipairs({{"primary", "Principal"}, {"secondary", "Secundária"}, {"highlight", "Destaque"}}) do
+            local key, title = spec[1], spec[2]
+            colorControls[index] = appearance:CreateColorPicker({
+                Key = key, Name = title, Default = defaults[key],
+                Callback = function(value)
+                    settings[key] = value
+                    AppearanceChanged()
+                end,
+            })
+        end
+        appearance:CreateButton({Name = "Aplicar paleta", Icon = "✓", Callback = function()
+            loading = true
+            themeControl:Set(themeChoice:Get())
+            for _, control in ipairs(colorControls) do control:Set("") end
+            loading = false
+            ApplyAppearance()
+            Changed()
+        end})
+        appearance:CreateButton({Name = "Restaurar tema padrão", Icon = "↺", Callback = function()
+            themeChoice:Set(defaults.theme)
+            loading = true
+            themeControl:Set(defaults.theme)
+            for _, control in ipairs(colorControls) do control:Set("") end
+            loading = false
+            ApplyAppearance()
+            Changed()
+        end})
+
+        Option(appearance, "CreateSlider", "scale", {Name = "Escala (%)", Min = 75, Max = 120, Step = 5})
+        Option(appearance, "CreateSlider", "transparency", {Name = "Transparência do fundo (%)", Min = 0, Max = 35, Step = 5})
+        Option(appearance, "CreateDropdown", "density", {Name = "Densidade", Options = {"Confortável", "Compacta"}})
+        Option(interface, "CreateToggle", "avatar", {Name = "Mostrar avatares"})
+        Option(interface, "CreateToggle", "animations", {Name = "Animações"})
+        Option(interface, "CreateToggle", "reduced", {Name = "Reduzir efeitos visuais"})
+        Option(interface, "CreateToggle", "notifications", {Name = "Notificações"})
+        Option(interface, "CreateSlider", "notificationSeconds", {Name = "Duração (0 = original)", Min = 0, Max = 8})
+        Option(interface, "CreateSlider", "floatSize", {Name = "Tamanho do botão flutuante", Min = 44, Max = 68, Step = 2})
+        Option(interface, "CreateDropdown", "floatSide", {Name = "Lado do botão", Options = {"Esquerda", "Direita"}})
+        Option(interface, "CreateKeybind", "keybind", {Name = "Atalho para abrir / minimizar"})
+        Option(performance, "CreateToggle", "lowPower", {Name = "Modo de baixo consumo"})
+        Option(performance, "CreateToggle", "diagnostics", {Name = "Mostrar FPS e ping"})
+        Option(performance, "CreateSlider", "refreshSeconds", {Name = "Intervalo do painel (s)", Min = 1, Max = 5})
+
+        local profileStatus = configuration:CreateLabel("")
+        local profileName = configuration:CreateInput({Name = "Nome do perfil", Default = "Padrao"})
+        local transfer = configuration:CreateInput({Name = "JSON para importar / copiar", Multiline = true})
+        local function Refresh()
+            local names = {}
+            for name in pairs(profiles) do table.insert(names, name) end
+            table.sort(names)
+            profileStatus:Set("Ativo: " .. activeProfile .. "  |  " .. status .. "\n" .. table.concat(names, " · "))
+        end
+        self.RefreshProfileStatus = Refresh
+        local function Commit()
+            Changed()
+            Flush()
+            Refresh()
+        end
+        local function Select(name)
+            activeProfile = name
+            ApplyProfile(profiles[name])
+            profileName:Set(name)
+            Commit()
+        end
+        local function Name()
+            local name = ProfileName(profileName:Get())
+            if not name then Message("Use até 32 letras ASCII, números, espaços, hífen ou sublinhado.", "warning") end
+            return name
+        end
+        local function CanAdd(name, renaming)
+            if profiles[name] then Message("Já existe um perfil com esse nome.", "warning") return false end
+            local count = 0
+            for _ in pairs(profiles) do count = count + 1 end
+            if count >= 16 and not renaming then Message("Limite de 16 perfis atingido.", "warning") return false end
+            return true
+        end
+
+        configuration:CreateButton({Name = "Salvar perfil ativo", Icon = "↓", Callback = Commit})
+        configuration:CreateButton({Name = "Criar a partir do perfil ativo", Icon = "+", Callback = function()
+            local name = Name()
+            if not name or not CanAdd(name) then return end
+            profiles[activeProfile] = Snapshot()
+            profiles[name] = Snapshot()
+            Select(name)
+        end})
+        configuration:CreateButton({Name = "Carregar pelo nome", Icon = "→", Callback = function()
+            local name = Name()
+            if not name then return end
+            if not profiles[name] then Message("Perfil não encontrado.", "warning") return end
+            profiles[activeProfile] = Snapshot()
+            Select(name)
+        end})
+        configuration:CreateButton({Name = "Renomear perfil ativo", Icon = "✎", Callback = function()
+            local name = Name()
+            if not name or not CanAdd(name, true) then return end
+            profiles[name], profiles[activeProfile] = Snapshot(), nil
+            Select(name)
+        end})
+        configuration:CreateButton({Name = "Excluir perfil pelo nome", Icon = "×", Callback = function()
+            local name = Name()
+            if not name then return end
+            if not profiles[name] then Message("Perfil não encontrado.", "warning") return end
+            self:Confirm("Excluir perfil?", name, "Excluir", function()
+                profiles[name] = nil
+                if name == activeProfile then
+                    local replacement = next(profiles)
+                    if not replacement then
+                        replacement = "Padrao"
+                        profiles[replacement] = {values = {}}
+                    end
+                    Select(replacement)
+                else
+                    Commit()
+                end
+            end)
+        end})
+        configuration:CreateButton({Name = "Exportar JSON", Icon = "↑", Callback = function()
+            local ok, json = pcall(HttpService.JSONEncode, HttpService, {schema = 1, profile = Snapshot()})
+            if not ok then Message("Falha ao codificar o perfil.", "warning") return end
+            transfer:Set(json)
+            local copy = setclipboard or toclipboard
+            local copied = type(copy) == "function" and pcall(copy, json)
+            Message(copied and "JSON copiado." or "JSON disponível no campo de transferência.", "success")
+        end})
+        configuration:CreateButton({Name = "Importar como novo perfil", Icon = "↓", Callback = function()
+            local name = Name()
+            if not name or not CanAdd(name) then return end
+            local document = Decode(transfer:Get())
+            local profile = document and document.schema == 1 and ValidateProfile(document.profile, true)
+            if not profile then Message("JSON inválido ou incompatível.", "warning") return end
+            profiles[activeProfile] = Snapshot()
+            profiles[name] = profile
+            Select(name)
+        end})
+        configuration:CreateButton({Name = "Restaurar padrão no perfil ativo", Icon = "↺", Callback = function()
+            self:Confirm("Restaurar configurações?", "Os valores deste perfil voltarão ao padrão.", "Restaurar", function()
+                ApplyProfile({values = {}})
+                Commit()
+            end)
+        end})
+
+        if filesAvailable then
+            local first, second = ReadSlot(1), ReadSlot(2)
+            local recovered = first
+            if second and (not first or second.revision > first.revision) then recovered = second end
+            if recovered then
+                revision, slot = recovered.revision, recovered == first and 1 or 2
+                profiles, activeProfile = recovered.profiles, recovered.active
+                status = "Perfis recuperados do dispositivo"
+                ApplyProfile(profiles[activeProfile])
+                profileName:Set(activeProfile)
+            else
+                status = "Nenhum perfil válido no dispositivo · aguardando gravação"
+            end
+        end
+        ApplyAppearance()
+        Refresh()
+    end
+
     function Library:Destroy()
         if Library.Destroyed then return end
+        Flush()
         Library.Destroyed = true
+        for _, running in pairs(table.clone(activeTweens)) do
+            for _, tween in pairs(table.clone(running)) do
+                pcall(function() tween:Cancel() end)
+            end
+        end
+        table.clear(activeTweens)
         for _, connection in ipairs(Library.Connections) do
             pcall(function() connection:Disconnect() end)
         end
@@ -1272,7 +1974,16 @@ local VANTA = (function()
         end
         table.clear(Library.Drawings)
         if env.VANTA_INSTANCE == Library then env.VANTA_INSTANCE = nil end
+        if env.VANTA_UI == Library then env.VANTA_UI = nil end
+        table.clear(bindings)
+        table.clear(Library.ThemeObservers)
+        table.clear(Library.Tabs)
+        Library.RefreshProfileStatus = nil
         if ScreenGui then ScreenGui:Destroy() end
+    end
+
+    function Library:BindThemeColor(object, property, role)
+        Bind(object, property, function() return Theme[role] end)
     end
 
     Library.TrackDrawing = TrackDrawing
@@ -1287,7 +1998,7 @@ end)()
 local __env = (getgenv and getgenv()) or _G
 __env.VANTA_UI = VANTA
 -- ============================================================================
--- VANTA 4.1 - PARTE 2 (motor: aimbot, silent aim, aim kill e ESP)
+-- VANTA 5.0 - PARTE 2 (motor: aimbot, silent aim, aim kill e ESP)
 -- Execute a PARTE 1 primeiro, depois esta.
 -- ============================================================================
 
@@ -1386,6 +2097,7 @@ AimButton.TextSize = 14
 AimButton.Font = Enum.Font.GothamBold
 AimButton.Visible = false
 AimButton.Parent = VANTA.ScreenGui
+VANTA:BindThemeColor(AimButton, "BackgroundColor3", "Accent")
 Instance.new("UICorner", AimButton).CornerRadius = UDim.new(1, 0)
 
 local function UpdateAimButton()
@@ -1432,7 +2144,6 @@ end))
 -- INTERFACE
 -- ==========================================
 local Window = VANTA
-Window:Notify({ Title = "VANTA 4.1", Description = "Crimson Obsidian carregado com sucesso.", Duration = 3 })
 
 local TabAimbot = Window:CreateTab("Aimbot", "🎯")
 local TabSilent = Window:CreateTab("Silent Aim", "🤫")
@@ -1453,8 +2164,8 @@ end
 
 -- Aimbot
 local Core = TabAimbot:CreateSection("Core de Mira")
-Core:CreateToggle({ Name = "Ativar Aimbot", Default = false, Callback = function(v) Config.Aimbot = v end })
-Core:CreateToggle({
+Core:CreateToggle({ Key = "Aimbot", Name = "Ativar Aimbot", Default = false, Callback = function(v) Config.Aimbot = v end })
+Core:CreateToggle({ Key = "HoldToAim",
     Name = "Segurar para mirar (botão AIM)", Default = false,
     Callback = function(v) Config.HoldToAim = v UpdateAimButton() end
 })
@@ -1463,121 +2174,126 @@ Core:CreateToggle({
     Callback = function(v) moveMode = v end
 })
 Core:CreateDropdown({
-    Name = "Preset", Options = { "Rage", "Legit" }, Default = "Rage",
+    Key = "Preset", Name = "Preset", Options = { "Rage", "Legit" }, Default = "Rage",
+    PassiveRestore = true,
     Callback = function(v) ApplyPreset(v) end
 })
 
 local Tune = TabAimbot:CreateSection("Ajustes (Aimbot e Aim Kill)")
-Controls.Smoothness = Tune:CreateSlider({
+Controls.Smoothness = Tune:CreateSlider({ Key = "Smoothness",
     Name = "Suavização (1 = instantâneo)", Min = 1, Max = 30, Default = 1, Step = 1,
     Callback = function(v) Config.Smoothness = v end
 })
-Controls.FOV = Tune:CreateSlider({
+Controls.FOV = Tune:CreateSlider({ Key = "FOV",
     Name = "FOV px (1000 = infinito)", Min = 10, Max = 1000, Default = 1000, Step = 10,
     Callback = function(v) Config.FOV = v end
 })
-Controls.MaxDistance = Tune:CreateSlider({
+Controls.MaxDistance = Tune:CreateSlider({ Key = "MaxDistance",
     Name = "Distância máxima", Min = 50, Max = 5000, Default = 5000, Step = 50,
     Callback = function(v) Config.MaxDistance = v end
 })
-Tune:CreateSlider({
+Tune:CreateSlider({ Key = "Prediction",
     Name = "Previsão de movimento", Min = 0, Max = 0.3, Default = 0, Step = 0.01,
     Callback = function(v) Config.Prediction = v end
 })
-Controls.Sticky = Tune:CreateToggle({
+Controls.Sticky = Tune:CreateToggle({ Key = "Sticky",
     Name = "Travar no alvo (sticky)", Default = true,
     Callback = function(v) Config.Sticky = v end
 })
 
 local Target = TabAimbot:CreateSection("Alvo e Wall Check")
-Target:CreateDropdown({
+Target:CreateDropdown({ Key = "TargetPart",
     Name = "HitPart", Options = { "Head", "Peito", "Torso" }, Default = "Head",
     Callback = function(v) Config.TargetPart = v end
 })
-Target:CreateDropdown({
+Target:CreateDropdown({ Key = "Priority",
     Name = "Prioridade", Options = { "Crosshair", "Distance", "Health" }, Default = "Crosshair",
     Callback = function(v) Config.Priority = v end
 })
-Target:CreateToggle({ Name = "Team Check", Default = true, Callback = function(v) Config.TeamCheck = v end })
-Target:CreateToggle({ Name = "Ignorar alvos com ForceField", Default = true, Callback = function(v) Config.IgnoreForceField = v end })
-Target:CreateToggle({ Name = "Wall Check", Default = true, Callback = function(v) Config.WallCheck = v end })
-Target:CreateToggle({ Name = "Parte visível automática", Default = true, Callback = function(v) Config.SmartPart = v end })
-Target:CreateToggle({ Name = "Debug Wall Check", Default = false, Callback = function(v) Config.DebugWall = v end })
+Target:CreateToggle({ Key = "TeamCheck", Name = "Team Check", Default = true, Callback = function(v) Config.TeamCheck = v end })
+Target:CreateToggle({ Key = "IgnoreForceField", Name = "Ignorar alvos com ForceField", Default = true, Callback = function(v) Config.IgnoreForceField = v end })
+Target:CreateToggle({ Key = "WallCheck", Name = "Wall Check", Default = true, Callback = function(v) Config.WallCheck = v end })
+Target:CreateToggle({ Key = "SmartPart", Name = "Parte visível automática", Default = true, Callback = function(v) Config.SmartPart = v end })
+Target:CreateToggle({ Key = "DebugWall", Name = "Debug Wall Check", Default = false, Callback = function(v) Config.DebugWall = v end })
 
 -- Silent Aim
 local SilentSection = TabSilent:CreateSection("Silent Aim")
-SilentSection:CreateToggle({ Name = "Ativar Silent Aim", Default = false, Callback = function(v) Config.SilentAim = v end })
-SilentSection:CreateDropdown({
+SilentSection:CreateToggle({ Key = "SilentAim", Name = "Ativar Silent Aim", Default = false, Callback = function(v) Config.SilentAim = v end })
+SilentSection:CreateDropdown({ Key = "SilentPart",
     Name = "Parte do Silent", Options = { "Head", "Peito", "Torso", "Aleatorio" }, Default = "Head",
     Callback = function(v) Config.SilentPart = v end
 })
-SilentSection:CreateSlider({
+SilentSection:CreateSlider({ Key = "SilentHeadChance",
     Name = "Chance de Head (modo Aleatorio)", Min = 0, Max = 100, Default = 70, Step = 5,
     Callback = function(v) Config.SilentHeadChance = v end
 })
-SilentSection:CreateSlider({
+SilentSection:CreateSlider({ Key = "SilentFOV",
     Name = "Silent FOV px (1000 = infinito)", Min = 10, Max = 1000, Default = 200, Step = 10,
     Callback = function(v) Config.SilentFOV = v end
 })
-SilentSection:CreateSlider({
+SilentSection:CreateSlider({ Key = "SilentHitChance",
     Name = "Hit Chance %", Min = 1, Max = 100, Default = 100, Step = 1,
     Callback = function(v) Config.SilentHitChance = v end
 })
-SilentSection:CreateSlider({
+SilentSection:CreateSlider({ Key = "SilentMinRay",
     Name = "Tamanho mínimo do raio (filtro)", Min = 5, Max = 200, Default = 25, Step = 5,
     Callback = function(v) Config.SilentMinRay = v end
 })
-SilentSection:CreateToggle({ Name = "Mostrar ponto no alvo", Default = true, Callback = function(v) Config.SilentDot = v end })
+SilentSection:CreateToggle({ Key = "SilentDot", Name = "Mostrar ponto no alvo", Default = true, Callback = function(v) Config.SilentDot = v end })
 
 local MethodSection = TabSilent:CreateSection("Métodos (ligue o que o jogo usa)")
-MethodSection:CreateToggle({ Name = "workspace:Raycast", Default = true, Callback = function(v) Config.SilentRaycast = v end })
-MethodSection:CreateToggle({ Name = "workspace:FindPartOnRay*", Default = true, Callback = function(v) Config.SilentFindPart = v end })
-MethodSection:CreateToggle({ Name = "Mouse.Hit / Target / UnitRay", Default = true, Callback = function(v) Config.SilentMouse = v end })
-MethodSection:CreateToggle({ Name = "Camera:ViewportPointToRay", Default = true, Callback = function(v) Config.SilentCameraRay = v end })
-MethodSection:CreateToggle({ Name = "UserInputService:GetMouseLocation", Default = false, Callback = function(v) Config.SilentMouseLoc = v end })
+MethodSection:CreateToggle({ Key = "SilentRaycast", Name = "workspace:Raycast", Default = true, Callback = function(v) Config.SilentRaycast = v end })
+MethodSection:CreateToggle({ Key = "SilentFindPart", Name = "workspace:FindPartOnRay*", Default = true, Callback = function(v) Config.SilentFindPart = v end })
+MethodSection:CreateToggle({ Key = "SilentMouse", Name = "Mouse.Hit / Target / UnitRay", Default = true, Callback = function(v) Config.SilentMouse = v end })
+MethodSection:CreateToggle({ Key = "SilentCameraRay", Name = "Camera:ViewportPointToRay", Default = true, Callback = function(v) Config.SilentCameraRay = v end })
+MethodSection:CreateToggle({ Key = "SilentMouseLoc", Name = "UserInputService:GetMouseLocation", Default = false, Callback = function(v) Config.SilentMouseLoc = v end })
 
 -- Aim Kill
 local KillSection = TabKill:CreateSection("Aim Kill")
-KillSection:CreateToggle({ Name = "Ativar Aim Kill (trava + atira)", Default = false, Callback = function(v) Config.AimKill = v end })
-KillSection:CreateToggle({
+KillSection:CreateToggle({ Key = "AimKill", Name = "Ativar Aim Kill (trava + atira)", Default = false, Callback = function(v) Config.AimKill = v end })
+KillSection:CreateToggle({ Key = "KillHold",
     Name = "Só quando segurar o botão AIM", Default = false,
     Callback = function(v) Config.KillHold = v UpdateAimButton() end
 })
-KillSection:CreateDropdown({
+KillSection:CreateDropdown({ Key = "KillMethod",
     Name = "Método de tiro", Options = { "Auto", "Tool", "Mouse", "VIM" }, Default = "Auto",
     Callback = function(v) Config.KillMethod = v end
 })
-KillSection:CreateSlider({
+KillSection:CreateSlider({ Key = "FireDelay",
     Name = "Intervalo entre tiros (s) [Tool]", Min = 0.03, Max = 1, Default = 0.1, Step = 0.01,
     Callback = function(v) Config.FireDelay = v end
 })
-KillSection:CreateSlider({
+KillSection:CreateSlider({ Key = "KillAlign",
     Name = "Tolerância de mira (graus)", Min = 0.5, Max = 10, Default = 2, Step = 0.5,
     Callback = function(v) Config.KillAlign = v end
 })
-KillSection:CreateSlider({
+KillSection:CreateSlider({ Key = "KillSwitchDelay",
     Name = "Atraso após kill (ms)", Min = 0, Max = 1000, Default = 0, Step = 50,
     Callback = function(v) Config.KillSwitchDelay = v end
 })
-KillSection:CreateToggle({ Name = "Equipar arma automaticamente", Default = true, Callback = function(v) Config.AutoEquip = v end })
-KillSection:CreateToggle({ Name = "Avisar a cada kill", Default = true, Callback = function(v) Config.KillNotify = v end })
+KillSection:CreateToggle({ Key = "AutoEquip", Name = "Equipar arma automaticamente", Default = true, Callback = function(v) Config.AutoEquip = v end })
+KillSection:CreateToggle({ Key = "KillNotify", Name = "Avisar a cada kill", Default = true, Callback = function(v) Config.KillNotify = v end })
 local KillLabel = KillSection:CreateLabel("Kills nesta sessão: 0")
 
 -- ESP
 local ESPSection = TabESP:CreateSection("ESP & Markers")
-ESPSection:CreateToggle({ Name = "ESP Box", Default = false, Callback = function(v) Config.ESPBox = v end })
-ESPSection:CreateToggle({ Name = "ESP Tracers", Default = false, Callback = function(v) Config.ESPTracers = v end })
-ESPSection:CreateToggle({ Name = "ESP Nomes", Default = false, Callback = function(v) Config.ESPNames = v end })
-ESPSection:CreateToggle({ Name = "ESP Vida", Default = false, Callback = function(v) Config.ESPHealth = v end })
-ESPSection:CreateToggle({ Name = "ESP Distância", Default = false, Callback = function(v) Config.ESPDistance = v end })
-ESPSection:CreateSlider({
+ESPSection:CreateToggle({ Key = "ESPBox", Name = "ESP Box", Default = false, Callback = function(v) Config.ESPBox = v end })
+ESPSection:CreateToggle({ Key = "ESPTracers", Name = "ESP Tracers", Default = false, Callback = function(v) Config.ESPTracers = v end })
+ESPSection:CreateToggle({ Key = "ESPNames", Name = "ESP Nomes", Default = false, Callback = function(v) Config.ESPNames = v end })
+ESPSection:CreateToggle({ Key = "ESPHealth", Name = "ESP Vida", Default = false, Callback = function(v) Config.ESPHealth = v end })
+ESPSection:CreateToggle({ Key = "ESPDistance", Name = "ESP Distância", Default = false, Callback = function(v) Config.ESPDistance = v end })
+ESPSection:CreateSlider({ Key = "ESPOffsetY",
     Name = "Ajuste Y do desenho (se estiver deslocado)", Min = -60, Max = 60, Default = 0, Step = 1,
     Callback = function(v) Config.ESPOffsetY = v end
 })
 
 local SettingsSection = TabSettings:CreateSection("Sistema & Extras")
-SettingsSection:CreateToggle({ Name = "Mostrar círculos de FOV", Default = false, Callback = function(v) Config.FOVOutline = v end })
-SettingsSection:CreateButton({ Name = "Descarregar Interface", Callback = function() VANTA:Destroy() end })
+SettingsSection:CreateToggle({ Key = "FOVOutline", Name = "Mostrar círculos de FOV", Default = false, Callback = function(v) Config.FOVOutline = v end })
+SettingsSection:CreateButton({Name = "Descarregar Interface", Icon = "×", Callback = function()
+    VANTA:Confirm("Descarregar VANTA?", "A sessão será encerrada.", "Descarregar", function() VANTA:Destroy() end)
+end})
+Window:BuildSettings(TabSettings)
+Window:Notify({Title = "VANTA 5.0", Description = "Interface pronta para uso.", Category = "success"})
 
 -- ==========================================
 -- WALL CHECK (com cache por frame)
