@@ -691,7 +691,7 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
                 local line = Create("Frame", {
                     AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale((x1 + x2) / 48, (y1 + y2) / 48),
                     Size = UDim2.fromScale((math.sqrt(dx * dx + dy * dy) + 0.9) / 24, 1.7 / 24),
-                    Rotation = math.deg(math.atan2(dy, dx)), BorderSizePixel = 0, ZIndex = frame.ZIndex,
+                    Rotation = math.deg(math.atan2(dy, dx)), BackgroundTransparency = 0, BorderSizePixel = 0, ZIndex = frame.ZIndex,
                 }, frame)
                 Corner(line, 5)
                 Paint(line, "BackgroundColor3")
@@ -812,13 +812,13 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         Corner(shadow, 12)
     end
 
-    local Main = Create("CanvasGroup", {
+    local Main = Create("Frame", {
         Name = "Main",
         ZIndex = 2,
         Size = UDim2.fromScale(1, 1),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        GroupTransparency = 1
+        ClipsDescendants = true,
     }, Root)
     Corner(Main, 12)
     local MainBackground = Create("Frame", {
@@ -827,8 +827,9 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         BorderSizePixel = 0,
         ZIndex = 1
     }, Main)
+    Corner(MainBackground, 12)
     Glow(MainBackground, "AccentDark", 0.32, 120)
-    local IntroScale = Create("UIScale", { Scale = 0.94 }, Main)
+    local IntroScale = Create("UIScale", { Scale = 0.97 }, Main)
     Library.Main = Main
 
     -- escala adaptativa a tela (rebind quando a camera mudar)
@@ -1229,7 +1230,7 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
     }, ScreenGui)
     FloatButton.BackgroundTransparency = 1
     local function FloatingSurface(button, zIndex)
-        local shell = Create("CanvasGroup", {
+        local shell = Create("Frame", {
             Size = UDim2.fromScale(1, 1), BorderSizePixel = 0, ZIndex = zIndex,
             BackgroundColor3 = Color3.new(1, 1, 1),
         }, button)
@@ -1239,11 +1240,31 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         return shell, edge
     end
 
+    -- Preserve per-element alpha while applying user opacity without a composite texture.
+    local function FloatingOpacity(shell)
+        local layers = {{shell, "BackgroundTransparency", 0}}
+        for _, child in ipairs(shell:GetDescendants()) do
+            if child:IsA("TextLabel") then
+                table.insert(layers, {child, "TextTransparency", child.TextTransparency})
+            elseif child:IsA("Frame") and child.BackgroundTransparency < 1 then
+                table.insert(layers, {child, "BackgroundTransparency", child.BackgroundTransparency})
+            elseif child:IsA("UIStroke") and child.Parent ~= shell then
+                table.insert(layers, {child, "Transparency", child.Transparency})
+            end
+        end
+        return function(opacity)
+            for _, layer in ipairs(layers) do
+                layer[1][layer[2]] = 1 - (1 - layer[3]) * opacity
+            end
+        end
+    end
+
     local FloatShell, FloatEdge = FloatingSurface(FloatButton, 201)
     Glyph(FloatShell, "brand", UDim2.fromScale(0.67, 0.67), UDim2.fromScale(0.165, 0.165), "Focus", 202)
+    local SetFloatOpacity = FloatingOpacity(FloatShell)
     AddPress(FloatButton)
-    Connect(FloatButton.MouseEnter, function() Tween(FloatEdge, {Transparency = 0.04}, 0.16) end)
-    Connect(FloatButton.MouseLeave, function() Tween(FloatEdge, {Transparency = 0.28}, 0.16) end)
+    Connect(FloatButton.MouseEnter, function() Tween(FloatEdge, {Transparency = 1 - 0.96 * settings.floatOpacity / 100}, 0.16) end)
+    Connect(FloatButton.MouseLeave, function() Tween(FloatEdge, {Transparency = 1 - 0.72 * settings.floatOpacity / 100}, 0.16) end)
 
     local function PositionInside(button, target, delta)
         local screen, size, anchor = ScreenGui.AbsoluteSize, button.AbsoluteSize, button.AnchorPoint
@@ -1271,11 +1292,17 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         local label = Text(shell, {
             Position = UDim2.fromScale(0, 0.65), Size = UDim2.fromScale(1, 0.25), Text = "AIM",
             TextXAlignment = Enum.TextXAlignment.Center, Font = Enum.Font.GothamBold, TextSize = 10,
-            TextColor3 = "@Focus", ZIndex = 182,
+            TextColor3 = "@Focus", TextTransparency = 0, ZIndex = 182,
         })
+        local SetOpacity = FloatingOpacity(shell)
+        local aimState = "idle"
+        local function EdgeTransparency()
+            return 1 - (aimState == "idle" and 0.72 or 0.96) * settings.aimOpacity / 100
+        end
         local function Update()
             button.Size = UDim2.fromOffset(settings.aimSize, settings.aimSize)
-            shell.GroupTransparency = 1 - settings.aimOpacity / 100
+            SetOpacity(settings.aimOpacity / 100)
+            Tween(edge, {Transparency = EdgeTransparency()}, 0.1)
             if button.Visible and ScreenGui.AbsoluteSize.X > 0 then
                 button.Position = PositionInside(button, button.Position)
             end
@@ -1284,18 +1311,20 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         Connect(ScreenGui:GetPropertyChangedSignal("AbsoluteSize"), Update)
         Update()
         return button, function(state)
+            aimState = state
             grip.Visible = state == "move"
             cross.Visible = not grip.Visible
             label.Text = grip.Visible and "MOVER" or state == "hold" and "ATIVO" or "AIM"
             colorCross(state == "hold" and "Focus" or "Icon")
-            Tween(edge, {Transparency = state == "idle" and 0.28 or 0.04}, 0.13)
+            Tween(edge, {Transparency = EdgeTransparency()}, 0.13)
         end
     end
 
     local appliedFloatSide
     local function UpdateLauncherAppearance()
         FloatButton.Size = UDim2.fromOffset(settings.floatSize, settings.floatSize)
-        FloatShell.GroupTransparency = 1 - settings.floatOpacity / 100
+        SetFloatOpacity(settings.floatOpacity / 100)
+        Tween(FloatEdge, {Transparency = 1 - 0.72 * settings.floatOpacity / 100}, 0.1)
         if FloatButton.Visible and ScreenGui.AbsoluteSize.X > 0 then
             FloatButton.Position = PositionInside(FloatButton, FloatButton.Position)
         end
@@ -1310,12 +1339,10 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         if state then
             FloatButton.Visible = false
             Root.Visible = true
-            Tween(Main, { GroupTransparency = 0 }, 0.25)
-            Tween(IntroScale, { Scale = 1 }, 0.4, Enum.EasingStyle.Back)
+            Tween(IntroScale, {Scale = 1}, 0.18)
         else
-            Tween(Main, { GroupTransparency = 1 }, 0.18)
-            Tween(IntroScale, { Scale = 0.94 }, 0.18)
-            task.delay(0.19, function()
+            Tween(IntroScale, {Scale = 0.97}, 0.12)
+            task.delay((settings.animations and not settings.reduced and not settings.lowPower) and 0.13 or 0, function()
                 if visibleToken == token and not Library.Destroyed then
                     Root.Visible = false
                     FloatButton.Visible = true
@@ -1421,11 +1448,10 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
             Tween(caption, {TextTransparency = active and 0 or 0.2}, 0.12)
         end
 
-        local PageGroup = Create("CanvasGroup", {
+        local PageGroup = Create("Frame", {
             Name = name,
             Size = UDim2.fromScale(1, 1),
             BackgroundTransparency = 1,
-            GroupTransparency = 1,
             Visible = false
         }, Pages)
 
@@ -1452,14 +1478,12 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
     
             if previous then
                 previous.Group.Visible = false
-                previous.Group.GroupTransparency = 1
                 previous.SetIconActive(false)
             end
 
             PageGroup.Position = UDim2.fromOffset(0, 12)
-            PageGroup.GroupTransparency = 1
             PageGroup.Visible = true
-            Tween(PageGroup, { GroupTransparency = 0, Position = UDim2.fromOffset(0, 0) }, 0.25)
+            Tween(PageGroup, {Position = UDim2.fromOffset(0, 0)}, 0.2)
             SetIconActive(true)
             if settings.animations and not settings.reduced and not settings.lowPower then
                 TabFlash.BackgroundTransparency = 0.18
@@ -2476,10 +2500,11 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         Refresh()
     end
 
-    function Library:Destroy()
+    function Library:Destroy(guiAlreadyDestroying)
         if Library.Destroyed then return end
         Flush()
         Library.Destroyed = true
+        if Library.OnShutdown then Library.OnShutdown() end
         for _, running in pairs(table.clone(activeTweens)) do
             for _, tween in pairs(table.clone(running)) do
                 pcall(function() tween:Cancel() end)
@@ -2500,7 +2525,7 @@ TJ/nHiTHFHQD+8A0rwvQi6x1L4UbRPab1Mo5Su52i5jK+k3uRS//P3N8pUDNT479AAAAAElFTkSuQmCC
         table.clear(Library.ThemeObservers)
         table.clear(Library.Tabs)
         Library.RefreshProfileStatus = nil
-        if ScreenGui then ScreenGui:Destroy() end
+        if not guiAlreadyDestroying then ScreenGui:Destroy() end
     end
 
     function Library:BindThemeColor(object, property, role)
@@ -2575,7 +2600,7 @@ local Config = {
     SilentRaycast = true,
     SilentFindPart = true,
     SilentMouse = true,
-    SilentCameraRay = true,
+    SilentCameraRay = false,
     SilentMouseLoc = false,
     SilentDot = true,
     -- aim kill
@@ -2753,7 +2778,7 @@ local MethodSection = TabSilent:CreateSection("Métodos (ligue o que o jogo usa)
 MethodSection:CreateToggle({ Key = "SilentRaycast", Name = "workspace:Raycast", Default = true, Callback = function(v) Config.SilentRaycast = v end })
 MethodSection:CreateToggle({ Key = "SilentFindPart", Name = "workspace:FindPartOnRay*", Default = true, Callback = function(v) Config.SilentFindPart = v end })
 MethodSection:CreateToggle({ Key = "SilentMouse", Name = "Mouse.Hit / Target / UnitRay", Default = true, Callback = function(v) Config.SilentMouse = v end })
-MethodSection:CreateToggle({ Key = "SilentCameraRay", Name = "Camera:ViewportPointToRay", Default = true, Callback = function(v) Config.SilentCameraRay = v end })
+MethodSection:CreateToggle({ Key = "SilentCameraRay", Name = "Camera:ViewportPointToRay", Default = false, Callback = function(v) Config.SilentCameraRay = v end })
 MethodSection:CreateToggle({ Key = "SilentMouseLoc", Name = "UserInputService:GetMouseLocation", Default = false, Callback = function(v) Config.SilentMouseLoc = v end })
 
 -- Aim Kill
@@ -2892,7 +2917,7 @@ local function RaycastVisible(character, part)
         if hit:IsDescendantOf(character) then return true end
 
         -- atravessa: invisivel, sem colisao ou colado na camera (viewmodel)
-        if hit:IsA("BasePart") and (hit.Transparency >= 0.8 or not hit.CanCollide or (result.Position - origin).Magnitude < 3) then
+        if hit:IsA("BasePart") and not hit:IsA("Terrain") and (hit.Transparency >= 0.8 or not hit.CanCollide or (result.Position - origin).Magnitude < 3) then
             table.insert(ignore, hit)
         else
             local now = os.clock()
@@ -2901,8 +2926,7 @@ local function RaycastVisible(character, part)
             end
             if Config.DebugWall and now - lastDebug > 0.5 then
                 lastDebug = os.clock()
-                print("[VANTA Wall] bloqueado por:", hit:GetFullName(),
-                    "| Transp:", hit.Transparency, "| CanCollide:", tostring(hit.CanCollide))
+                print("[VANTA Wall] bloqueado por:", hit:GetFullName(), "| Classe:", hit.ClassName)
             end
             return false
         end
@@ -2928,77 +2952,47 @@ local PartLists = {
     Torso = { "HumanoidRootPart", "UpperTorso", "Torso", "Head" },
 }
 
-local function FirstPart(character, list)
-    for _, name in ipairs(list) do
-        local part = character:FindFirstChild(name)
-        if part and part:IsA("BasePart") then return part end
-    end
-    return nil
-end
-
--- devolve a parte preferida; se estiver atras da parede, tenta as outras (SmartPart)
-local function PickPart(character, list)
-    for index, name in ipairs(list) do
-        local part = character:FindFirstChild(name)
-        if part and part:IsA("BasePart") then
-            if IsVisible(character, part) then return part end
-            if not Config.SmartPart then return nil end
-        end
-    end
-    return nil
-end
-
 local function AimPosition(part)
     local pos = part.Position
     if Config.Prediction > 0 and part.Parent then
         local root = part.Parent:FindFirstChild("HumanoidRootPart")
-        if root then pos = pos + root.AssemblyLinearVelocity * Config.Prediction end
+        if root and root:IsA("BasePart") then pos = pos + root.AssemblyLinearVelocity * Config.Prediction end
     end
     return pos
 end
 
 -- devolve parte, pontuacao (menor = melhor) e humanoid; ou nil
+local function SameTeam(player)
+    return not LocalPlayer.Neutral and not player.Neutral and player.Team ~= nil and player.Team == LocalPlayer.Team
+end
+
 local function Evaluate(player, camera, center, origin, fov, pref)
     if player == LocalPlayer then return nil end
     local character = player.Character
     if not character then return nil end
-    if Config.TeamCheck and player.Team ~= nil and player.Team == LocalPlayer.Team then return nil end
+    if Config.TeamCheck and SameTeam(player) then return nil end
 
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not humanoid or humanoid.Health <= 0 then return nil end
     if Config.IgnoreForceField and character:FindFirstChildOfClass("ForceField") then return nil end
 
-    local list = PartLists[pref] or PartLists.Head
-    local first = FirstPart(character, list)
-    if not first then return nil end
-
-    local dist3d = (first.Position - origin).Magnitude
-    if dist3d > Config.MaxDistance then return nil end
-
-    local sp = camera:WorldToViewportPoint(first.Position)
-    if sp.Z <= 0 then return nil end
-
-    local pixel = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-    if fov < 1000 and pixel > fov then return nil end
-
-    local part = PickPart(character, list)
-    if not part then return nil end
-
-    if part ~= first then
-        local projected = camera:WorldToViewportPoint(part.Position)
-        if projected.Z <= 0 then return nil end
-        pixel = (Vector2.new(projected.X, projected.Y) - center).Magnitude
-        dist3d = (part.Position - origin).Magnitude
-        if (fov < 1000 and pixel > fov) or dist3d > Config.MaxDistance then return nil end
+    for _, name in ipairs(PartLists[pref] or PartLists.Head) do
+        local part = character:FindFirstChild(name)
+        if part and part:IsA("BasePart") then
+            local distance = (part.Position - origin).Magnitude
+            local projected, onScreen = camera:WorldToViewportPoint(part.Position)
+            if distance <= Config.MaxDistance and projected.Z > 0 and onScreen then
+                local pixel = (Vector2.new(projected.X, projected.Y) - center).Magnitude
+                if (fov >= 1000 or pixel <= fov) and IsVisible(character, part) then
+                    local score = Config.Priority == "Distance" and distance
+                        or Config.Priority == "Health" and humanoid.Health or pixel
+                    return part, score, humanoid
+                end
+            end
+            if not Config.SmartPart then return nil end
+        end
     end
-
-    local score = pixel
-    if Config.Priority == "Distance" then
-        score = dist3d
-    elseif Config.Priority == "Health" then
-        score = humanoid.Health
-    end
-    return part, score, humanoid
+    return nil
 end
 
 -- devolve jogador, parte, humanoid
@@ -3119,10 +3113,24 @@ local function Retarget(origin, direction)
 end
 
 -- devolve uma tabela empacotada (table.pack) quando tratou a chamada
+local rayMethods = {Raycast = "SilentRaycast", FindPartOnRay = "SilentFindPart",
+    FindPartOnRayWithIgnoreList = "SilentFindPart", FindPartOnRayWithWhitelist = "SilentFindPart"}
+local cameraMethods = {ViewportPointToRay = true, ScreenPointToRay = true}
+
 local function Handler(self, method, oldNC, ...)
+    local eligible = (self == workspace and Config[rayMethods[method]])
+        or (self == Silent.Camera and Config.SilentCameraRay and cameraMethods[method])
+        or (self == Silent.UIS and Config.SilentMouseLoc and method == "GetMouseLocation" and Silent.ScreenPos)
+    if not eligible then return nil end
+    if type(getcallingscript) == "function" then
+        local ok, caller = pcall(getcallingscript)
+        if ok and typeof(caller) == "Instance" then
+            local path = string.lower(caller:GetFullName())
+            if path:find("aimassist", 1, true) or path:find("targetselector", 1, true) then return nil end
+        end
+    end
     if self == workspace then
         if method == "Raycast" then
-            if not Config.SilentRaycast then return nil end
             local origin, direction = ...
             if typeof(origin) ~= "Vector3" or typeof(direction) ~= "Vector3" then
                 diagnostics.rejectReason = "Argumentos incompatíveis"
@@ -3136,7 +3144,6 @@ local function Handler(self, method, oldNC, ...)
             end
             RecordSilent(method, "rejected")
         elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
-            if not Config.SilentFindPart then return nil end
             local ray = ...
             if typeof(ray) ~= "Ray" then diagnostics.rejectReason = "Argumentos incompatíveis" end
             if typeof(ray) == "Ray" and ShouldRedirect(ray.Origin, ray.Direction) then
@@ -3233,7 +3240,7 @@ local Kill = {last = -math.huge, lastEquip = -math.huge, switchUntil = 0, kills 
 
 local function ReleaseFire()
     local release = Kill.release
-    Kill.release, Kill.backend = nil, nil
+    Kill.release, Kill.backend, Kill.pulseUntil = nil, nil, nil
     if release then pcall(release) end
 end
 
@@ -3260,14 +3267,28 @@ local function Fire(want)
     local tool
     if method == "Auto" or method == "Tool" then
         tool = ResolveTool()
-        if method == "Auto" then method = tool and "Tool" or "Mouse" end
+        if method == "Auto" then
+            if tool then
+                method = "Tool"
+            elseif type(mouse1click) == "function"
+                or (type(mouse1press) == "function" and type(mouse1release) == "function") then
+                method = "Mouse"
+            else
+                method = "VIM"
+            end
+        end
     end
 
     local backend = method == "Tool" and tool or method
     if Kill.backend ~= backend then ReleaseFire() end
+    local now = os.clock()
     if Kill.release then
-        diagnostics.kill = method .. " · gatilho pressionado"
-        return true
+        if Kill.pulseUntil and now >= Kill.pulseUntil then
+            ReleaseFire()
+        else
+            diagnostics.kill = method .. " · gatilho pressionado"
+            return true
+        end
     end
     if method == "Tool" and not tool then
         diagnostics.kill = "Tool · sem arma equipada"
@@ -3278,7 +3299,6 @@ local function Fire(want)
         return false
     end
 
-    local now = os.clock()
     if now - Kill.last < Config.FireDelay then
         diagnostics.kill = method .. " · aguardando intervalo"
         return false
@@ -3287,8 +3307,13 @@ local function Fire(want)
     diagnostics.kill = method .. " · acionando"
     if method == "Tool" and tool and tool.Enabled then
         local ok = pcall(tool.Activate, tool)
-        if ok then pcall(tool.Deactivate, tool)
-        else diagnostics.kill = "Tool · ativação falhou" end
+        if ok then
+            Kill.backend = backend
+            Kill.release = function() tool:Deactivate() end
+            Kill.pulseUntil = now + math.min(0.05, Config.FireDelay * 0.5)
+        else
+            diagnostics.kill = "Tool · ativação falhou"
+        end
         return ok
     elseif method == "Mouse" then
         if type(mouse1press) == "function" and type(mouse1release) == "function" then
@@ -3422,13 +3447,13 @@ table.insert(VANTA.Connections, {
 })
 
 -- ao fechar a interface: solta o gatilho e desliga os hooks (ficam em passagem direta)
-VANTA.ScreenGui.Destroying:Connect(function()
+VANTA.OnShutdown = function()
     Config.Aimbot, Config.AimKill, Config.SilentAim = false, false, false
     pcall(function() Fire(false) end)
     ClearSilent()
     if Silent.Handler == Handler then Silent.Handler, Silent.Observe = nil, nil end
-    if env.VANTA_INSTANCE == VANTA then env.VANTA_INSTANCE = nil end
-end)
+end
+Track(VANTA.ScreenGui.Destroying:Connect(function() VANTA:Destroy(true) end))
 
 -- ==========================================
 -- DRAWINGS: FOV, PONTO DO SILENT E ESP
@@ -3452,7 +3477,11 @@ local drawingOk = pcall(function()
 end)
 
 if not drawingOk then
-    VANTA:Notify({ Title = "Aviso", Description = "Executor sem Drawing: ESP e círculos desativados.", Duration = 5 })
+    for _, circle in pairs({FOVCircle, SilentCircle, SilentDot}) do
+        pcall(function() circle:Remove() end)
+        VANTA.UntrackDrawing(circle)
+    end
+    VANTA:Notify({Title = "Aviso", Description = "Drawing indisponível ou incompleto: ESP e círculos desativados.", Duration = 5})
 end
 
 local ESP = {}
@@ -3467,21 +3496,18 @@ local function NewESP()
         d.name = Drawing.new("Text")
         d.hpBg = Drawing.new("Square")
         d.hpFill = Drawing.new("Square")
+        d.box.Color, d.box.Thickness, d.box.Filled = ACCENT, 1.2, false
+        d.tracer.Color, d.tracer.Thickness = ACCENT, 1
+        d.name.Color, d.name.Size, d.name.Center, d.name.Outline = Color3.new(1, 1, 1), 13, true, true
+        d.hpBg.Filled, d.hpBg.Color = true, Color3.new(0, 0, 0)
+        d.hpFill.Filled = true
+        for _, object in pairs(d) do object.Visible = false end
     end)
-    for _, o in pairs(d) do VANTA.TrackDrawing(o) end
     if not ok then
-        for _, o in pairs(d) do
-            pcall(function() o:Remove() end)
-            VANTA.UntrackDrawing(o)
-        end
+        for _, object in pairs(d) do pcall(function() object:Remove() end) end
         return false
     end
-    d.box.Color, d.box.Thickness, d.box.Filled = ACCENT, 1.2, false
-    d.tracer.Color, d.tracer.Thickness = ACCENT, 1
-    d.name.Color, d.name.Size, d.name.Center, d.name.Outline = Color3.new(1, 1, 1), 13, true, true
-    d.hpBg.Filled, d.hpBg.Color = true, Color3.new(0, 0, 0)
-    d.hpFill.Filled = true
-    for _, o in pairs(d) do o.Visible = false end
+    for _, object in pairs(d) do VANTA.TrackDrawing(object) end
     return d
 end
 
@@ -3507,7 +3533,14 @@ Track(Players.PlayerRemoving:Connect(RemoveESP))
 Track(RunService.RenderStepped:Connect(function()
     if VANTA.Destroyed or not drawingOk then return end
     local camera = workspace.CurrentCamera
-    if not camera then return end
+    if not camera then
+        FOVCircle.Visible, SilentCircle.Visible, SilentDot.Visible = false, false, false
+        if espWasOn then
+            for _, drawing in pairs(ESP) do if drawing then HideESP(drawing) end end
+            espWasOn = false
+        end
+        return
+    end
 
     local viewport = camera.ViewportSize
     local oy = Config.ESPOffsetY
@@ -3558,8 +3591,8 @@ Track(RunService.RenderStepped:Connect(function()
                 local humanoid = character and character:FindFirstChildOfClass("Humanoid")
                 local root = character and (character.PrimaryPart or character:FindFirstChild("HumanoidRootPart"))
 
-                if not humanoid or not root or humanoid.Health <= 0
-                    or (Config.TeamCheck and player.Team ~= nil and player.Team == LocalPlayer.Team) then
+                if not humanoid or not root or not root:IsA("BasePart") or humanoid.Health <= 0
+                    or (Config.TeamCheck and SameTeam(player)) then
                     HideESP(d)
                 else
                     local pos, onScreen = camera:WorldToViewportPoint(root.Position)
